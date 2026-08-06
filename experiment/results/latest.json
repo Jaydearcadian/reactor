@@ -1,0 +1,48 @@
+{
+  "evidence_level": "X1 deterministic local fixture",
+  "warning": "These are configured reaction-delay models, not measured Solana, Jito, or MagicBlock results.",
+  "trials": [
+    {
+      "nominal_window_ms": 50,
+      "paths": [
+        {"name":"baseline-model","final_state":"OBSERVING","captured":false,"verified":false,"locked_at_ms":null,"detection_to_lock_ms":null,"false_locks":0,"duplicate_lock_attempts":0,"versions":null},
+        {"name":"reactor-model","final_state":"VERIFIED","captured":true,"verified":true,"locked_at_ms":100,"detection_to_lock_ms":0,"false_locks":0,"duplicate_lock_attempts":0,"versions":{"authority":1,"cost":1,"exposure":1,"health":1,"liquidity":1,"oracle":1}}
+      ]
+    },
+    {
+      "nominal_window_ms": 100,
+      "paths": [
+        {"name":"baseline-model","final_state":"OBSERVING","captured":false,"verified":false,"locked_at_ms":null,"detection_to_lock_ms":null,"false_locks":0,"duplicate_lock_attempts":0,"versions":null},
+        {"name":"reactor-model","final_state":"VERIFIED","captured":true,"verified":true,"locked_at_ms":100,"detection_to_lock_ms":0,"false_locks":0,"duplicate_lock_attempts":0,"versions":{"authority":1,"cost":1,"exposure":1,"health":1,"liquidity":1,"oracle":1}}
+      ]
+    },
+    {
+      "nominal_window_ms": 150,
+      "paths": [
+        {"name":"baseline-model","final_state":"OBSERVING","captured":false,"verified":false,"locked_at_ms":null,"detection_to_lock_ms":null,"false_locks":0,"duplicate_lock_attempts":0,"versions":null},
+        {"name":"reactor-model","final_state":"VERIFIED","captured":true,"verified":true,"locked_at_ms":100,"detection_to_lock_ms":0,"false_locks":0,"duplicate_lock_attempts":0,"versions":{"authority":1,"cost":1,"exposure":1,"health":1,"liquidity":1,"oracle":1}}
+      ]
+    },
+    {
+      "nominal_window_ms": 250,
+      "paths": [
+        {"name":"baseline-model","final_state":"OBSERVING","captured":false,"verified":false,"locked_at_ms":null,"detection_to_lock_ms":null,"false_locks":0,"duplicate_lock_attempts":0,"versions":null},
+        {"name":"reactor-model","final_state":"VERIFIED","captured":true,"verified":true,"locked_at_ms":100,"detection_to_lock_ms":0,"false_locks":0,"duplicate_lock_attempts":0,"versions":{"authority":1,"cost":1,"exposure":1,"health":1,"liquidity":1,"oracle":1}}
+      ]
+    },
+    {
+      "nominal_window_ms": 500,
+      "paths": [
+        {"name":"baseline-model","final_state":"VERIFIED","captured":true,"verified":true,"locked_at_ms":400,"detection_to_lock_ms":300,"false_locks":0,"duplicate_lock_attempts":0,"versions":{"authority":1,"cost":1,"exposure":1,"health":1,"liquidity":1,"oracle":1}},
+        {"name":"reactor-model","final_state":"VERIFIED","captured":true,"verified":true,"locked_at_ms":100,"detection_to_lock_ms":0,"false_locks":0,"duplicate_lock_attempts":0,"versions":{"authority":1,"cost":1,"exposure":1,"health":1,"liquidity":1,"oracle":1}}
+      ]
+    },
+    {
+      "nominal_window_ms": 1000,
+      "paths": [
+        {"name":"baseline-model","final_state":"VERIFIED","captured":true,"verified":true,"locked_at_ms":400,"detection_to_lock_ms":300,"false_locks":0,"duplicate_lock_attempts":0,"versions":{"authority":1,"cost":1,"exposure":1,"health":1,"liquidity":1,"oracle":1}},
+        {"name":"reactor-model","final_state":"VERIFIED","captured":true,"verified":true,"locked_at_ms":100,"detection_to_lock_ms":0,"false_locks":0,"duplicate_lock_attempts":0,"versions":{"authority":1,"cost":1,"exposure":1,"health":1,"liquidity":1,"oracle":1}}
+      ]
+    }
+  ]
+}
