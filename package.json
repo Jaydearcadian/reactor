@@ -11,7 +11,9 @@
     "fixture:solana": "node scripts/run_solana_fixture.mjs",
     "test:m2": "node scripts/run_m2_local.mjs",
     "test:m2:proof": "node scripts/run_m2_proof.mjs",
-    "test:m3": "node scripts/run_m3_magicblock_skill.mjs"
+    "test:m3": "node scripts/run_m3_magicblock_skill.mjs",
+    "test:m4:telemetry": "node --test tests-js/m4-telemetry.test.mjs",
+    "benchmark:m4": "node scripts/run_m4_capture.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
