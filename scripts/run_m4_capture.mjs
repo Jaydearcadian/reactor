@@ -27,6 +27,8 @@ const MAGICBLOCK_BASE_RPC = process.env.REACTOR_BASE_RPC ?? 'https://rpc.magicbl
 const ROUTER_RPC = process.env.REACTOR_ROUTER_RPC ?? 'https://devnet-router.magicblock.app/';
 const PATH_MODE = process.env.REACTOR_M4_PATH ?? 'both';
 const TRIALS_PER_WINDOW = Number(process.env.REACTOR_M4_TRIALS_PER_WINDOW ?? 1);
+const CONFIRM_ATTEMPTS = Number(process.env.REACTOR_M4_CONFIRM_ATTEMPTS ?? 160);
+const CONFIRM_POLL_MS = Number(process.env.REACTOR_M4_CONFIRM_POLL_MS ?? 100);
 const WINDOW_MS = (process.env.REACTOR_M4_WINDOWS_MS ?? '50,100,150,250,500,1000')
   .split(',')
   .map((value) => Number(value.trim()))
@@ -52,9 +54,32 @@ async function setupSend(builder, signers = []) {
   return signature;
 }
 
+// M4a measures the earliest executable/captured state. We therefore submit and
+// observe at `processed`, then independently require the same signatures to reach
+// `confirmed` before crediting the trial. Confirmation is durability evidence,
+// not part of the capture window.
 async function measuredSend(builder, signers = []) {
   const signed = signers.length > 0 ? builder.signers(signers) : builder;
-  return signed.rpc({ commitment: 'confirmed' });
+  return signed.rpc({ commitment: 'processed' });
+}
+
+async function waitForConfirmed(connection, signature, attempts = CONFIRM_ATTEMPTS) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const response = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const status = response.value[0];
+    if (status) {
+      if (status.err != null) {
+        throw new Error(`transaction ${signature} failed: ${JSON.stringify(status.err)}`);
+      }
+      if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+        return status;
+      }
+    }
+    await sleep(CONFIRM_POLL_MS);
+  }
+  throw new Error(`transaction ${signature} was not observed confirmed`);
 }
 
 async function getDelegationStatus(pubkey) {
@@ -254,16 +279,34 @@ async function runTrial({ mode, windowMs, trialIndex, baseProgram, baseProvider,
     validityUntilSlot: fixture.validityUntilSlot,
     authorityModel: 'independent-source-transactions',
     measuredPathHasNoSlotLookup: true,
+    captureCommitment: 'processed',
+    durabilityCommitment: 'confirmed',
   });
 
+  let openSignature = null;
+  let decisionSignature = null;
+  let exactVersionMatch = false;
+  let withinWindow = false;
+  let decisionError = null;
+
+  // T0 is the actual anchor. Start the close timer only after recording it so the
+  // requested window length is not shortened by harness setup work.
+  telemetry.mark('window_open_emitted', { source: 'condition-2', sequence: 2, predicateResult: true });
   const closePromise = new Promise((resolve) => {
     setTimeout(async () => {
       telemetry.mark('window_close_emitted', { source: 'condition-0', sequence: 2, predicateResult: false });
       try {
         const signature = await fixture.update(0, 2, false, true);
         telemetry.signature('windowCloseUpdate', signature);
-        telemetry.mark('window_close_acknowledged');
-        resolve({ ok: true, signature });
+        telemetry.mark('window_close_processed');
+        try {
+          const status = await waitForConfirmed(fixture.activeConnection, signature);
+          telemetry.mark('window_close_confirmed', { slot: status.slot });
+          resolve({ ok: true, signature, status });
+        } catch (error) {
+          telemetry.mark('window_close_confirmation_failed', { error: String(error?.message ?? error) });
+          resolve({ ok: false, signature, error: String(error?.message ?? error) });
+        }
       } catch (error) {
         telemetry.mark('window_close_failed', { error: String(error?.message ?? error) });
         resolve({ ok: false, error: String(error?.message ?? error) });
@@ -271,18 +314,16 @@ async function runTrial({ mode, windowMs, trialIndex, baseProgram, baseProvider,
     }, windowMs);
   });
 
-  telemetry.mark('window_open_emitted', { source: 'condition-2', sequence: 2, predicateResult: true });
   try {
-    const openSignature = await fixture.update(2, 2, true, true);
+    openSignature = await fixture.update(2, 2, true, true);
     telemetry.signature('windowOpenUpdate', openSignature);
-    telemetry.mark('window_open_acknowledged');
+    telemetry.mark('window_open_processed');
 
-    const observed = await fixture.activeProgram.account.conditionState.fetch(fixture.conditionPdas[2], 'confirmed');
-    assert(Number(observed.sequence) === 2 && observed.predicateResult === true, 'opening condition was not observed as executable');
-    telemetry.mark('condition_observed', { sequence: Number(observed.sequence) });
+    const observed = await fixture.activeProgram.account.conditionState.fetch(fixture.conditionPdas[2], 'processed');
+    assert(Number(observed.sequence) === 2 && observed.predicateResult === true, 'opening condition was not observed executable at processed commitment');
+    telemetry.mark('condition_observed', { sequence: Number(observed.sequence), commitment: 'processed' });
 
     telemetry.mark('decision_submitted');
-    let decisionSignature;
     if (mode === 'magicblock') {
       const evaluationAccounts = {
         sessionCandidate: fixture.candidatePda,
@@ -321,31 +362,74 @@ async function runTrial({ mode, windowMs, trialIndex, baseProgram, baseProvider,
       );
     }
     telemetry.signature('decision', decisionSignature);
-    telemetry.mark('decision_acknowledged');
+    telemetry.mark('decision_processed');
 
-    let exactVersionMatch = false;
     if (mode === 'magicblock') {
-      const candidate = await fixture.activeProgram.account.sessionCandidate.fetch(fixture.candidatePda, 'confirmed');
+      const candidate = await fixture.activeProgram.account.sessionCandidate.fetch(fixture.candidatePda, 'processed');
       exactVersionMatch = candidate.ready === true && candidate.frozenSequences.map(Number).join(',') === EXPECTED_SEQUENCES.join(',');
     } else {
-      const lock = await fixture.activeProgram.account.executionLock.fetch(fixture.lockPda, 'confirmed');
+      const lock = await fixture.activeProgram.account.executionLock.fetch(fixture.lockPda, 'processed');
       exactVersionMatch = lock.sequences.map(Number).join(',') === EXPECTED_SEQUENCES.join(',');
     }
-    telemetry.mark('capture_observed');
+
+    telemetry.mark('capture_observed', { commitment: 'processed' });
     const captureMs = telemetry.deltaMs('window_open_emitted', 'capture_observed');
-    const withinWindow = captureMs != null && captureMs <= windowMs;
+    withinWindow = captureMs != null && captureMs <= windowMs;
     telemetry.set({
       exactVersionMatch,
-      capture: exactVersionMatch && withinWindow,
       staleAttempt: exactVersionMatch && !withinWindow,
       falseLock: !exactVersionMatch,
     });
   } catch (error) {
-    telemetry.mark('decision_failed', { error: String(error?.message ?? error) });
-    telemetry.set({ capture: false });
+    decisionError = String(error?.message ?? error);
+    telemetry.mark('decision_failed', { error: decisionError });
+    telemetry.set({ capture: false, failure: decisionError });
   }
 
-  await closePromise;
+  // Durability checks happen after capture observation and therefore do not inflate
+  // capture latency. A processed capture is credited only if its source and decision
+  // transactions subsequently become confirmed.
+  let openConfirmed = false;
+  let decisionConfirmed = false;
+
+  if (openSignature) {
+    try {
+      const status = await waitForConfirmed(fixture.activeConnection, openSignature);
+      telemetry.mark('window_open_confirmed', { slot: status.slot });
+      openConfirmed = true;
+    } catch (error) {
+      telemetry.mark('window_open_confirmation_failed', { error: String(error?.message ?? error) });
+    }
+  }
+
+  if (decisionSignature) {
+    try {
+      const status = await waitForConfirmed(fixture.activeConnection, decisionSignature);
+      telemetry.mark('decision_confirmed', { slot: status.slot });
+      decisionConfirmed = true;
+    } catch (error) {
+      telemetry.mark('decision_confirmation_failed', { error: String(error?.message ?? error) });
+    }
+  }
+
+  const closeResult = await closePromise;
+  const closeConfirmed = closeResult.ok === true;
+  const durableCapture = exactVersionMatch && withinWindow && openConfirmed && decisionConfirmed && closeConfirmed;
+  const ambiguous = Boolean(
+    (openSignature && !openConfirmed) ||
+    (decisionSignature && !decisionConfirmed) ||
+    !closeConfirmed,
+  );
+
+  telemetry.set({
+    capture: durableCapture,
+    ambiguous,
+    openConfirmed,
+    decisionConfirmed,
+    closeConfirmed,
+    failure: decisionError,
+  });
+
   return telemetry.finish();
 }
 
@@ -386,6 +470,7 @@ console.log(`paths: ${modes.join(', ')}`);
 console.log(`windows: ${WINDOW_MS.join(', ')} ms`);
 console.log(`trials/window/path: ${TRIALS_PER_WINDOW}`);
 console.log('setup/delegation time is excluded from measured latency');
+console.log('capture is observed at processed commitment; source and decision signatures must later confirm');
 console.log('measured source updates use a precomputed validity horizon; no getSlot RPC is inside the timed path');
 
 const trials = [];
@@ -403,7 +488,8 @@ for (const windowMs of WINDOW_MS) {
         providerPayer,
       });
       trials.push(trial);
-      console.log(`${mode} window=${windowMs}ms capture=${trial.capture} exact=${trial.exactVersionMatch} stale=${trial.staleAttempt} latency=${trial.latency.captureMs?.toFixed(2) ?? 'n/a'}ms`);
+      const failure = trial.failure ? ` failure=${trial.failure}` : '';
+      console.log(`${mode} window=${windowMs}ms capture=${trial.capture} exact=${trial.exactVersionMatch} stale=${trial.staleAttempt} ambiguous=${trial.ambiguous} latency=${trial.latency.captureMs?.toFixed(2) ?? 'n/a'}ms${failure}`);
     }
   }
 }
@@ -422,6 +508,8 @@ const output = {
     setupPaceMs: SETUP_PACE_MS,
     conditionTtlSlots: CONDITION_TTL_SLOTS,
     measuredPathHasNoSlotLookup: true,
+    captureCommitment: 'processed',
+    durabilityCommitment: 'confirmed',
   },
   summary: summarizeByBand(trials),
   trials,
