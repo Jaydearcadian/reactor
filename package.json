@@ -11,10 +11,11 @@
     "fixture:solana": "node scripts/run_solana_fixture.mjs",
     "test:m2": "node scripts/run_m2_local.mjs",
     "test:m2:proof": "node scripts/run_m2_proof.mjs",
-    "test:m3": "node scripts/run_m3_magicblock.mjs"
+    "test:m3": "node scripts/run_m3_magicblock_skill.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
+    "@magicblock-labs/ephemeral-rollups-sdk": "0.15.5",
     "@solana/web3.js": "^1.98.4"
   }
 }
