@@ -4,7 +4,7 @@
 
 Reactor observes independently changing execution conditions, determines when they are jointly executable under one bounded objective, freezes the exact compatible state versions into an immutable lock, and separates transaction submission from verified objective completion.
 
-> Status: M1 product hypothesis and deterministic fixture are implemented. M2 has now passed the adversarial local-validator acceptance gate: the Anchor program compiled and executed, stale and false condition states were rejected, one exact-version lock settled 100,000 lamports with value conservation, the controlled exposure moved from 700 to 500, the Receipt verified the Objective, and duplicate execution was rejected. Solana devnet, MagicBlock, Jito, latency advantage, market demand, and production-security claims remain unproven.
+> Status: M1 product hypothesis and deterministic fixture are implemented. M2 has passed both the adversarial local-validator gate and the same lifecycle on Solana devnet. On devnet, stale and false states were rejected, one exact-version lock conserved a 100,000-lamport settlement, controlled exposure moved from 700 to 500, the Receipt verified the Objective, and duplicate execution was rejected. M3 MagicBlock integration is now the active build step. MagicBlock capture advantage, Jito comparison, market demand, arbitrary external DEX reservation and production-security claims remain unproven.
 
 ## The thesis
 
@@ -45,11 +45,11 @@ The Anchor program in `programs/reactor/` introduces real Solana accounts for:
 
 The first controlled economic fixture uses native SOL rather than SPL tokens or an external DEX. This proves actual value movement while keeping token and venue behavior outside the primitive test.
 
-See `M2_EXECUTABILITY_LOCK.md` for the full acceptance gate.
+See `M2_EXECUTABILITY_LOCK.md` for the local acceptance gate and `M2_DEVNET.md` for the public-cluster replay.
 
 ## M2 adversarial proof
 
-The local runner deliberately attempts to break the lock before accepting the happy path:
+The runner deliberately attempts to break the lock before accepting the happy path:
 
 ```text
 six conditions valid
@@ -66,15 +66,19 @@ six conditions valid
 → duplicate execution fails
 ```
 
-With Rust, Solana CLI, Anchor 0.32.1+, Node and npm installed:
+Local validator:
 
 ```bash
 bash scripts/bootstrap_m2_local.sh
 ```
 
-The script keeps deployment key material local. The first Anchor build creates the local program keypair, `sync_m2_program_id.mjs` aligns `declare_id!` with it, the program rebuilds, and `anchor test` runs the adversarial proof.
+Solana devnet:
 
-A passing local-validator run on 2026-08-07 produced:
+```bash
+bash scripts/bootstrap_m2_devnet.sh
+```
+
+### Demonstrated local result — 2026-08-07
 
 ```text
 stale exact sequence        rejected
@@ -89,7 +93,58 @@ lock                         consumed=true
 duplicate execution         rejected
 ```
 
-The captured evidence artifact is `experiment/results/m2-local-2026-08-07.json`.
+Evidence: `experiment/results/m2-local-2026-08-07.json`.
+
+### Demonstrated Solana devnet result — 2026-08-07
+
+```text
+program                     75ph49gq12tUVV2XAfmDozseGfuu5ZTSZDPB8MPF8oax
+stale exact sequence        rejected
+false predicate             rejected
+frozen sequences            [1,1,3,1,1,1]
+later condition update      lock unchanged
+vault debit                 100000 lamports
+recipient credit            100000 lamports
+exposure                    700 -> 500
+Receipt                     verified=true
+lock                         consumed=true
+duplicate execution         rejected
+```
+
+Evidence: `experiment/results/m2-devnet-2026-08-07.json`.
+
+The devnet settlement transaction was observed at slot `481894440`; the balance reads spanning slots `481894437 → 481894443` showed an exact `100000`-lamport Vault debit and recipient credit.
+
+## M3 — MagicBlock ER integration
+
+M3 preserves the proven M2 settlement primitive and moves only the hot coordination state into a MagicBlock Ephemeral Rollup.
+
+```text
+SOLANA
+Path / Objective / Vault
+        │
+        │ delegate hot state
+        ▼
+MAGICBLOCK ER
+ConditionState × 6
+SessionCandidate
+        ↓
+exact joint-validity detection
+        ↓
+sealed candidate
+        │ commit
+        ▼
+SOLANA
+materialize canonical ExecutionLock
+        ↓
+existing execute_locked
+        ↓
+Receipt
+```
+
+The ER candidate cannot spend the Vault. Solana must revalidate the committed candidate against the current Path, Objective and Vault before creating the canonical `ExecutionLock`.
+
+See `M3_MAGICBLOCK.md` for the architecture boundary, acceptance gate and failure conditions.
 
 ## Deterministic experiment fixture
 
@@ -125,12 +180,12 @@ Connectivity is not execution evidence. An RPC or bundle acknowledgement must ne
 
 ## Evidence boundary
 
-The repository now supports these local-validator execution claims:
+The repository now supports these **public-testnet execution claims**:
 
-- the Anchor/Solana M2 program compiles and executes locally;
+- the Reactor Anchor program deploys and executes on Solana devnet;
 - exact condition versions can be bound into an immutable lock;
 - replayed or stale sequences are rejected;
-- false or expired conditions cannot lock;
+- false conditions cannot lock;
 - Objective, Path and Vault relationships are explicitly bound;
 - a lock cannot be created if its predicted postcondition cannot satisfy the Objective;
 - later condition updates do not substitute themselves into an accepted lock;
@@ -142,7 +197,7 @@ The repository now supports these local-validator execution claims:
 
 The repository does **not** yet prove:
 
-- Solana devnet M2 execution;
+- MagicBlock ER execution of the Reactor hot path;
 - representative market-maker demand;
 - material Solana/Jito miss rates;
 - MagicBlock capture superiority;
@@ -158,6 +213,8 @@ reactor/
 ├── EXPERIMENT_PROTOCOL.md
 ├── STATE_MACHINE.md
 ├── M2_EXECUTABILITY_LOCK.md
+├── M2_DEVNET.md
+├── M3_MAGICBLOCK.md
 ├── LIVE_BENCHMARK.md
 ├── WHITEPAPER.md
 ├── Anchor.toml
@@ -168,7 +225,9 @@ reactor/
 ├── src/reactor/
 ├── scripts/
 │   ├── bootstrap_m2_local.sh
+│   ├── bootstrap_m2_devnet.sh
 │   ├── run_m2_local.mjs
+│   ├── run_m2_proof.mjs
 │   ├── sync_m2_program_id.mjs
 │   ├── run_experiment.py
 │   ├── run_solana_fixture.mjs
@@ -181,13 +240,14 @@ reactor/
 
 ## Next proof
 
-M2 local execution is complete. The immediate next proof is:
+M2 correctness is now demonstrated locally and on Solana devnet. The active sequence is:
 
-1. repeat the same M2 lifecycle on Solana devnet;
-2. capture raw transaction, account and postcondition evidence;
-3. keep the economic action and Objective unchanged;
-4. only then delegate the hot `ConditionState` evaluation path into MagicBlock;
-5. replay the same condition schedule across standard Solana devnet and MagicBlock devnet;
-6. measure verified valid-window capture rate, false-lock rate and end-to-end timing.
+1. add `SessionCandidate` and MagicBlock delegation hooks without changing the proven settlement path;
+2. delegate six `ConditionState` accounts plus the candidate to a MagicBlock devnet validator;
+3. execute authenticated hot updates and joint-validity evaluation in ER;
+4. commit the sealed candidate back to Solana;
+5. materialize the canonical `ExecutionLock` on Solana with full Path/Objective/Vault revalidation;
+6. reuse `execute_locked` and prove the same exact settlement/Receipt outcome;
+7. only after M3 passes, replay one condition schedule across Solana-only and ER paths for M4.
 
-The primary later benchmark metric remains **verified valid-window capture rate**. The non-negotiable safety metric remains **zero false locks**.
+The primary M4 metric remains **verified valid-window capture rate**. The non-negotiable safety metric remains **zero false locks**.
