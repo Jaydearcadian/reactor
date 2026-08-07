@@ -5,6 +5,7 @@ command -v anchor >/dev/null 2>&1 || { echo "anchor CLI is required" >&2; exit 1
 command -v solana >/dev/null 2>&1 || { echo "solana CLI is required" >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "npm is required" >&2; exit 1; }
 command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
+command -v ps >/dev/null 2>&1 || { echo "ps is required" >&2; exit 1; }
 
 if ! command -v ephemeral-validator >/dev/null 2>&1; then
   echo "Missing ephemeral-validator." >&2
@@ -32,8 +33,11 @@ IDL="${REACTOR_IDL:-target/idl/reactor.json}"
 LOG_DIR="experiment/results/m4-engine-logs"
 BASE_LOG="$LOG_DIR/mb-test-validator.log"
 ER_LOG="$LOG_DIR/ephemeral-validator.log"
+PID_DIR="$LOG_DIR/pids"
+BASE_PID_FILE="$PID_DIR/mb-test-validator.pid"
+ER_PID_FILE="$PID_DIR/ephemeral-validator.pid"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$PID_DIR"
 
 if [[ ! -f "$WALLET" ]]; then
   echo "Missing wallet: $WALLET" >&2
@@ -43,25 +47,163 @@ fi
 BASE_PID=""
 ER_PID=""
 
+show_base_log() {
+  if [[ -f "$BASE_LOG" ]]; then
+    echo >&2
+    echo "---- mb-test-validator.log (last 120 lines) ----" >&2
+    tail -n 120 "$BASE_LOG" >&2 || true
+    echo "---- end mb-test-validator.log ----" >&2
+  fi
+}
+
 show_er_log() {
   if [[ -f "$ER_LOG" ]]; then
-    echo
+    echo >&2
     echo "---- ephemeral-validator.log (last 120 lines) ----" >&2
     tail -n 120 "$ER_LOG" >&2 || true
     echo "---- end ephemeral-validator.log ----" >&2
   fi
 }
 
+listener_pids() {
+  local port="$1"
+  local output=""
+
+  if command -v lsof >/dev/null 2>&1; then
+    output="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  elif command -v fuser >/dev/null 2>&1; then
+    output="$(fuser "$port"/tcp 2>/dev/null || true)"
+  elif command -v ss >/dev/null 2>&1; then
+    output="$(ss -ltnp "sport = :$port" 2>/dev/null \
+      | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' \
+      | sort -u || true)"
+  else
+    echo "Need one of lsof, fuser, or ss to perform safe local-port preflight." >&2
+    return 2
+  fi
+
+  printf '%s\n' "$output" \
+    | tr ' ' '\n' \
+    | sed '/^[[:space:]]*$/d' \
+    | sort -u
+}
+
+is_benchmark_local_process() {
+  local pid="$1"
+  local args
+  args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  [[ "$args" =~ (mb-test-validator|solana-test-validator|solana-faucet|ephemeral-validator) ]]
+}
+
+terminate_pid_safely() {
+  local pid="$1"
+  local label="$2"
+
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! is_benchmark_local_process "$pid"; then
+    local args
+    args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    echo "$label is occupied by unrelated PID $pid." >&2
+    echo "Command: $args" >&2
+    echo "Refusing to terminate an unrelated process." >&2
+    return 1
+  fi
+
+  local args
+  args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  echo "Cleaning stale benchmark process PID $pid: $args"
+  kill "$pid" >/dev/null 2>&1 || true
+
+  for _ in {1..40}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "Stale benchmark PID $pid did not exit after SIGTERM; sending SIGKILL."
+  kill -9 "$pid" >/dev/null 2>&1 || true
+  sleep 0.2
+}
+
+clean_port_if_stale() {
+  local port="$1"
+  local label="$2"
+  local pids
+
+  if ! pids="$(listener_pids "$port")"; then
+    return 1
+  fi
+
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    terminate_pid_safely "$pid" "$label (port $port)" || return 1
+  done <<< "$pids"
+
+  sleep 0.2
+  if [[ -n "$(listener_pids "$port")" ]]; then
+    echo "$label port $port is still occupied after stale-process cleanup." >&2
+    return 1
+  fi
+}
+
+clean_pidfile_process() {
+  local pidfile="$1"
+  local label="$2"
+  if [[ ! -f "$pidfile" ]]; then
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  rm -f "$pidfile"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" >/dev/null 2>&1; then
+    terminate_pid_safely "$pid" "$label" || return 1
+  fi
+}
+
+cleanup_current_process() {
+  local pid="$1"
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Kill known direct children first (for example a spawned local faucet), then
+  # the validator process itself. Port preflight on the next run remains the
+  # final guard against any orphan that outlives its parent.
+  if command -v pgrep >/dev/null 2>&1; then
+    local children
+    children="$(pgrep -P "$pid" 2>/dev/null || true)"
+    while IFS= read -r child; do
+      [[ -n "$child" ]] || continue
+      if is_benchmark_local_process "$child"; then
+        kill "$child" >/dev/null 2>&1 || true
+      fi
+    done <<< "$children"
+  fi
+
+  kill "$pid" >/dev/null 2>&1 || true
+  for _ in {1..30}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  kill -9 "$pid" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   set +e
-  if [[ -n "$ER_PID" ]] && kill -0 "$ER_PID" >/dev/null 2>&1; then
-    kill "$ER_PID" >/dev/null 2>&1 || true
-    wait "$ER_PID" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "$BASE_PID" ]] && kill -0 "$BASE_PID" >/dev/null 2>&1; then
-    kill "$BASE_PID" >/dev/null 2>&1 || true
-    wait "$BASE_PID" >/dev/null 2>&1 || true
-  fi
+  cleanup_current_process "$ER_PID"
+  cleanup_current_process "$BASE_PID"
+  rm -f "$ER_PID_FILE" "$BASE_PID_FILE"
 }
 trap cleanup EXIT INT TERM
 
@@ -96,12 +238,35 @@ wait_rpc_stable() {
   return 1
 }
 
+echo "Preflighting local M4-Engine ports..."
+clean_pidfile_process "$ER_PID_FILE" "stale local ER PID file process"
+clean_pidfile_process "$BASE_PID_FILE" "stale local base PID file process"
+
+# MagicBlock's documented fully-local defaults use base RPC/WS 8899/8900,
+# local ER RPC/WS 7799/7800, and the Solana test-validator faucet on 9900.
+# Only known validator/faucet processes are terminated; unrelated listeners are
+# reported and left untouched.
+for spec in \
+  "8899:Local Solana RPC" \
+  "8900:Local Solana WebSocket" \
+  "9900:Local Solana faucet" \
+  "7799:Local MagicBlock ER RPC" \
+  "7800:Local MagicBlock ER WebSocket"
+do
+  port="${spec%%:*}"
+  label="${spec#*:}"
+  clean_port_if_stale "$port" "$label"
+done
+
+echo "Local benchmark ports are clear."
+
 echo "Starting fully local MagicBlock base validator..."
 mb-test-validator --reset >"$BASE_LOG" 2>&1 &
 BASE_PID=$!
+printf '%s\n' "$BASE_PID" > "$BASE_PID_FILE"
 if ! wait_rpc_stable "$BASE_RPC" "Local Solana base" "$BASE_PID" 160 4; then
   echo "Local base validator failed readiness." >&2
-  tail -n 120 "$BASE_LOG" >&2 || true
+  show_base_log
   exit 1
 fi
 
@@ -149,6 +314,7 @@ RUST_LOG="${RUST_LOG:-warn}" ephemeral-validator \
   -l 7799 \
   --lifecycle ephemeral >"$ER_LOG" 2>&1 &
 ER_PID=$!
+printf '%s\n' "$ER_PID" > "$ER_PID_FILE"
 
 if ! wait_rpc_stable "$ER_RPC" "Local MagicBlock ER" "$ER_PID" 200 8; then
   echo "Local MagicBlock ER failed stable readiness." >&2
@@ -162,7 +328,6 @@ if ! kill -0 "$ER_PID" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Give the ER a short stabilization interval after the RPC starts answering.
 sleep 2
 
 if ! kill -0 "$ER_PID" >/dev/null 2>&1; then
@@ -188,12 +353,16 @@ export REACTOR_M4_ENGINE_TRIALS="$TRIALS"
 
 echo
 echo "Running controlled local M4-Engine benchmark..."
-if ! node scripts/run_m4_engine_local.mjs; then
-  STATUS=$?
-  echo "M4-Engine runner failed." >&2
+set +e
+node scripts/run_m4_engine_local.mjs
+STATUS=$?
+set -e
+if (( STATUS != 0 )); then
+  echo "M4-Engine runner failed with exit code $STATUS." >&2
   if [[ -n "$ER_PID" ]] && ! kill -0 "$ER_PID" >/dev/null 2>&1; then
     echo "The local ER process is no longer alive." >&2
   fi
+  show_base_log
   show_er_log
   exit "$STATUS"
 fi
