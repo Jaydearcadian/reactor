@@ -2,7 +2,7 @@ from pathlib import Path
 import unittest
 
 
-PROGRAM = Path("programs/reactor/src/program.rs").read_text()
+PROGRAM = Path("programs/reactor/src/lib.rs").read_text()
 
 
 class M2SourceContractTests(unittest.TestCase):
