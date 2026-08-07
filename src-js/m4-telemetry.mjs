@@ -77,6 +77,37 @@ export function percentile(values, p) {
   return xs[lower] * (1 - weight) + xs[upper] * weight;
 }
 
+export function wilsonInterval95(successes, trials) {
+  if (!Number.isInteger(successes) || !Number.isInteger(trials) || successes < 0 || trials < 0 || successes > trials) {
+    throw new Error('invalid binomial counts');
+  }
+  if (trials === 0) return null;
+  const z = 1.959963984540054;
+  const z2 = z * z;
+  const p = successes / trials;
+  const denominator = 1 + z2 / trials;
+  const center = (p + z2 / (2 * trials)) / denominator;
+  const margin = (z * Math.sqrt((p * (1 - p) / trials) + (z2 / (4 * trials * trials)))) / denominator;
+  return {
+    lower: Math.max(0, center - margin),
+    upper: Math.min(1, center + margin),
+  };
+}
+
+export function captureRateDifference95(treatmentSuccesses, treatmentTrials, baselineSuccesses, baselineTrials) {
+  if (treatmentTrials === 0 || baselineTrials === 0) return null;
+  const treatmentRate = treatmentSuccesses / treatmentTrials;
+  const baselineRate = baselineSuccesses / baselineTrials;
+  const treatmentInterval = wilsonInterval95(treatmentSuccesses, treatmentTrials);
+  const baselineInterval = wilsonInterval95(baselineSuccesses, baselineTrials);
+  return {
+    difference: treatmentRate - baselineRate,
+    lower: treatmentInterval.lower - baselineInterval.upper,
+    upper: treatmentInterval.upper - baselineInterval.lower,
+    method: 'newcombe-wilson-conservative',
+  };
+}
+
 export function summarizeTrials(trials) {
   const captureLatencies = trials.map((trial) => trial.latency?.captureMs).filter(Number.isFinite);
   const verifiedLatencies = trials.map((trial) => trial.latency?.verifiedMs).filter(Number.isFinite);
@@ -89,10 +120,13 @@ export function summarizeTrials(trials) {
     trials: total,
     captured,
     captureRate: total === 0 ? null : captured / total,
+    captureRate95: wilsonInterval95(captured, total),
     verified,
     verifiedCaptureRate: total === 0 ? null : verified / total,
+    verifiedCaptureRate95: wilsonInterval95(verified, total),
     falseLocks,
     falseLockRate: total === 0 ? null : falseLocks / total,
+    falseLockRate95: wilsonInterval95(falseLocks, total),
     captureLatencyMs: {
       p50: percentile(captureLatencies, 0.50),
       p95: percentile(captureLatencies, 0.95),
