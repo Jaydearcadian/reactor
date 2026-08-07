@@ -4,7 +4,7 @@
 
 Reactor observes independently changing execution conditions, determines when they are jointly executable under one bounded objective, freezes the exact compatible state versions into an immutable lock, and separates transaction submission from verified objective completion.
 
-> Status: M1 product hypothesis and deterministic fixture are implemented. M2 has passed both the adversarial local-validator gate and the same lifecycle on Solana devnet. On devnet, stale and false states were rejected, one exact-version lock conserved a 100,000-lamport settlement, controlled exposure moved from 700 to 500, the Receipt verified the Objective, and duplicate execution was rejected. M3 MagicBlock integration is now the active build step. MagicBlock capture advantage, Jito comparison, market demand, arbitrary external DEX reservation and production-security claims remain unproven.
+> Status: M1 product hypothesis and deterministic fixture are implemented. M2 has passed both the adversarial local-validator gate and the same lifecycle on Solana devnet. M3a is now demonstrated end to end on MagicBlock + Solana devnet: seven hot accounts were delegated, exact versions were sealed in ER, the candidate was commit-and-undelegated back to Solana, the canonical lock materialized, exactly 100000 lamports settled, exposure moved `700 -> 500`, the Receipt verified, and replay was rejected. M4 measured capture benchmarking is now the active proof. MagicBlock capture advantage, Jito superiority comparison, market demand, arbitrary external DEX reservation and production-security claims remain unproven.
 
 ## The thesis
 
@@ -47,37 +47,6 @@ The first controlled economic fixture uses native SOL rather than SPL tokens or 
 
 See `M2_EXECUTABILITY_LOCK.md` for the local acceptance gate and `M2_DEVNET.md` for the public-cluster replay.
 
-## M2 adversarial proof
-
-The runner deliberately attempts to break the lock before accepting the happy path:
-
-```text
-six conditions valid
-→ one condition advances to a false version
-→ stale-version lock attempt must fail
-→ exact false-predicate lock attempt must fail
-→ source publishes a new valid version
-→ exact versions lock
-→ another condition changes after the lock
-→ frozen lock remains unchanged
-→ SOL moves from Vault to frozen recipient
-→ exposure reaches Objective target
-→ Receipt verifies postcondition
-→ duplicate execution fails
-```
-
-Local validator:
-
-```bash
-bash scripts/bootstrap_m2_local.sh
-```
-
-Solana devnet:
-
-```bash
-bash scripts/bootstrap_m2_devnet.sh
-```
-
 ### Demonstrated local result — 2026-08-07
 
 ```text
@@ -113,9 +82,9 @@ duplicate execution         rejected
 
 Evidence: `experiment/results/m2-devnet-2026-08-07.json`.
 
-The devnet settlement transaction was observed at slot `481894440`; the balance reads spanning slots `481894437 → 481894443` showed an exact `100000`-lamport Vault debit and recipient credit.
+The devnet settlement transaction was observed at slot `481894440`; the balance reads spanning slots `481894437 -> 481894443` showed an exact `100000`-lamport Vault debit and recipient credit.
 
-## M3 — MagicBlock ER integration
+## M3 — Demonstrated MagicBlock ER integration
 
 M3 preserves the proven M2 settlement primitive and moves only the hot coordination state into a MagicBlock Ephemeral Rollup.
 
@@ -132,7 +101,7 @@ SessionCandidate
 exact joint-validity detection
         ↓
 sealed candidate
-        │ commit
+        │ commit + undelegate
         ▼
 SOLANA
 materialize canonical ExecutionLock
@@ -142,9 +111,94 @@ existing execute_locked
 Receipt
 ```
 
-The ER candidate cannot spend the Vault. Solana must revalidate the committed candidate against the current Path, Objective and Vault before creating the canonical `ExecutionLock`.
+### Demonstrated MagicBlock/Solana result — 2026-08-07
 
-See `M3_MAGICBLOCK.md` for the architecture boundary, acceptance gate and failure conditions.
+```text
+program                     75ph49gq12tUVV2XAfmDozseGfuu5ZTSZDPB8MPF8oax
+ER                          https://devnet-as.magicblock.app/
+validator                   MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57
+all seven hot accounts      delegated + ownership verified
+stale exact sequence        rejected in ER
+false predicate             rejected in ER
+frozen sequences            [1,1,3,1,1,1]
+post-seal mutation          candidate unchanged
+candidate commit            observed on Solana
+candidate undelegation      observed on Solana
+canonical lock              materialized
+vault debit                 100000 lamports
+recipient credit            100000 lamports
+exposure                    700 -> 500
+Receipt                     verified=true
+lock                         consumed=true
+duplicate execution         rejected
+```
+
+Evidence: `experiment/results/m3-magicblock-devnet-2026-08-07.json`.
+
+M3 is an integration-correctness proof, not a latency benchmark. During the passing run, the preferred MagicBlock base RPC was unavailable and the harness used canonical Solana devnet for base-layer operations; MagicBlock router/ER remained the delegation and hot-execution path. The ER candidate never received authority to spend the Vault.
+
+See `M3_MAGICBLOCK.md` for the architecture boundary and `M4_BENCHMARK.md` for the now-active performance falsification gate.
+
+## M4 — Active measured capture benchmark
+
+M4 deliberately excludes build, deployment, account initialization, funding, delegation and router propagation from hot-path timing. It compares the same logical independently authorized condition schedule across warmed paths.
+
+The controlled window opens when condition 2 advances to a valid version and closes when condition 0 advances to a false version. A valid capture must freeze exactly:
+
+```text
+[1,1,2,1,1,1]
+```
+
+The primary hot-path interval is:
+
+```text
+final required source event emitted
+        ↓
+authoritative condition observed
+        ↓
+lock / candidate decision
+        ↓
+exact lock / candidate observed
+```
+
+Primary M4a metric:
+
+```text
+capture_latency_ms = capture_observed - window_open_emitted
+```
+
+Primary M4b product metric:
+
+```text
+Verified valid-window capture rate
+= verified objectives attributable to valuable windows
+  / valuable windows generated
+```
+
+Non-negotiable safety metric:
+
+```text
+false-lock rate = 0
+```
+
+The continuation threshold was frozen before measured results: Reactor needs zero false locks plus at least a 20 percentage-point absolute capture improvement over the strongest same-cluster implemented baseline in two adjacent short-window bands, with a 95% interval excluding zero once sample size is sufficient.
+
+Smoke the M4a harness without rebuilding/redeploying:
+
+```bash
+REACTOR_M4_WINDOWS_MS=150,500 \
+REACTOR_M4_TRIALS_PER_WINDOW=1 \
+bash scripts/bootstrap_m4_capture.sh
+```
+
+A normal M4a run writes:
+
+```text
+experiment/results/m4-capture-latest.json
+experiment/results/m4-capture-analysis-latest.json
+```
+
+Jito Block Engine comparison is kept separate until Reactor has same-workload Solana testnet parity; Jito does not provide a same-cluster devnet Block Engine baseline.
 
 ## Deterministic experiment fixture
 
@@ -159,50 +213,48 @@ The experiment runner writes `experiment/results/latest.json`.
 
 ## Live measurement harness
 
-The repository also contains:
+The repository contains:
 
 - monotonic live telemetry;
-- strict `SUBMITTED → ACKNOWLEDGED → OBSERVED → VERIFIED` evidence states;
+- strict `SUBMITTED -> ACKNOWLEDGED -> OBSERVED -> VERIFIED` evidence states;
 - JSON-RPC connectivity probes;
 - a signed standard-Solana transfer fixture;
 - a shared signed-transaction artifact format;
-- the benchmark contract in `LIVE_BENCHMARK.md`.
-
-Probe endpoints with:
-
-```bash
-export SOLANA_RPC_URL="<solana-json-rpc-endpoint>"
-export MAGICBLOCK_RPC_URL="<magicblock-json-rpc-endpoint>"
-python scripts/probe_live_paths.py
-```
+- M4 monotonic trial telemetry and percentile aggregation;
+- Wilson/Newcombe-style 95% capture-rate comparison intervals;
+- the benchmark contracts in `LIVE_BENCHMARK.md` and `M4_BENCHMARK.md`.
 
 Connectivity is not execution evidence. An RPC or bundle acknowledgement must never be counted as verified execution.
 
 ## Evidence boundary
 
-The repository now supports these **public-testnet execution claims**:
+The repository now supports these **public-devnet execution claims**:
 
 - the Reactor Anchor program deploys and executes on Solana devnet;
 - exact condition versions can be bound into an immutable lock;
 - replayed or stale sequences are rejected;
 - false conditions cannot lock;
 - Objective, Path and Vault relationships are explicitly bound;
-- a lock cannot be created if its predicted postcondition cannot satisfy the Objective;
 - later condition updates do not substitute themselves into an accepted lock;
-- bounded program-owned SOL moved through the frozen action with exact value conservation;
-- the controlled exposure reached the Objective target;
-- the resulting Receipt verified the postcondition;
+- bounded program-owned SOL moves through the frozen action with exact value conservation;
+- controlled exposure reaches the Objective target;
+- the resulting Receipt verifies the postcondition;
 - duplicate execution is blocked;
-- `SUBMITTED`, `ACKNOWLEDGED`, `OBSERVED`, and `VERIFIED` remain separate evidence states.
+- Reactor hot condition/candidate state can be delegated into a MagicBlock ER;
+- authenticated condition updates and exact-version candidate sealing execute in ER;
+- a sealed candidate survives later condition mutation unchanged;
+- the candidate can be committed and undelegated back to Solana;
+- Solana can revalidate that candidate into the canonical lock and reuse the proven settlement path;
+- ER, base commitment, materialization and settlement signatures remain separate evidence artifacts.
 
 The repository does **not** yet prove:
 
-- MagicBlock ER execution of the Reactor hot path;
-- representative market-maker demand;
+- MagicBlock capture superiority over a strong same-cluster baseline;
+- representative market-maker or agent demand;
 - material Solana/Jito miss rates;
-- MagicBlock capture superiority;
 - arbitrary external DEX state reservation;
-- production security.
+- production security;
+- production profitability or prevalence of valuable short-lived windows.
 
 ## Repository map
 
@@ -215,23 +267,25 @@ reactor/
 ├── M2_EXECUTABILITY_LOCK.md
 ├── M2_DEVNET.md
 ├── M3_MAGICBLOCK.md
+├── M4_BENCHMARK.md
 ├── LIVE_BENCHMARK.md
 ├── WHITEPAPER.md
 ├── Anchor.toml
 ├── Cargo.toml
 ├── programs/reactor/
-│   ├── Cargo.toml
-│   └── src/lib.rs
 ├── src/reactor/
+├── src-js/
+│   ├── transaction-artifact.mjs
+│   └── m4-telemetry.mjs
 ├── scripts/
 │   ├── bootstrap_m2_local.sh
 │   ├── bootstrap_m2_devnet.sh
-│   ├── run_m2_local.mjs
-│   ├── run_m2_proof.mjs
-│   ├── sync_m2_program_id.mjs
-│   ├── run_experiment.py
-│   ├── run_solana_fixture.mjs
-│   └── probe_live_paths.py
+│   ├── bootstrap_m3_magicblock.sh
+│   ├── bootstrap_m4_capture.sh
+│   ├── run_m3_magicblock_skill.mjs
+│   ├── run_m4_capture.mjs
+│   ├── analyze_m4_capture.mjs
+│   └── ...
 ├── tests/
 ├── tests-js/
 ├── experiment/results/
@@ -240,14 +294,12 @@ reactor/
 
 ## Next proof
 
-M2 correctness is now demonstrated locally and on Solana devnet. The active sequence is:
+M3a correctness is demonstrated. The active sequence is now:
 
-1. add `SessionCandidate` and MagicBlock delegation hooks without changing the proven settlement path;
-2. delegate six `ConditionState` accounts plus the candidate to a MagicBlock devnet validator;
-3. execute authenticated hot updates and joint-validity evaluation in ER;
-4. commit the sealed candidate back to Solana;
-5. materialize the canonical `ExecutionLock` on Solana with full Path/Objective/Vault revalidation;
-6. reuse `execute_locked` and prove the same exact settlement/Receipt outcome;
-7. only after M3 passes, replay one condition schedule across Solana-only and ER paths for M4.
-
-The primary M4 metric remains **verified valid-window capture rate**. The non-negotiable safety metric remains **zero false locks**.
+1. smoke-test M4a on two bands with one trial per path to validate the live benchmark harness;
+2. fix benchmark mechanics only if the smoke run exposes measurement or integration faults;
+3. run the controlled M4a window matrix on warmed Solana and MagicBlock paths;
+4. inspect capture rate, stale-attempt rate, false-lock rate and capture-latency distributions;
+5. only if M4a shows a meaningful signal, run M4b with full commit/materialization/settlement verification;
+6. establish Reactor testnet parity before treating Jito as a directly comparable strong baseline;
+7. replace synthetic windows with representative traces before making a market claim.
