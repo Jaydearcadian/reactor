@@ -1,10 +1,16 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{self, Transfer};
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
 
 declare_id!("9FKmHB6A6WUPpnvEaXfYekHgDvS9cBYY2yA3P4CEaEeD");
 
 pub const CONDITION_COUNT: usize = 6;
+pub const CONDITION_SEED: &[u8] = b"condition";
+pub const SESSION_CANDIDATE_SEED: &[u8] = b"session_candidate";
 
+#[ephemeral]
 #[program]
 pub mod reactor {
     use super::*;
@@ -112,6 +118,178 @@ pub mod reactor {
         Ok(())
     }
 
+    pub fn initialize_session_candidate(
+        ctx: Context<InitializeSessionCandidate>,
+        recipient: Pubkey,
+        transfer_lamports: u64,
+        exposure_reduction: i64,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let path = &ctx.accounts.path;
+        let objective = &ctx.accounts.objective;
+        let vault = &ctx.accounts.vault;
+
+        require_keys_eq!(objective.path, path.key(), ReactorError::ObjectivePathMismatch);
+        require_keys_eq!(vault.objective, objective.key(), ReactorError::VaultObjectiveMismatch);
+        require!(clock.slot < path.expires_at_slot, ReactorError::PathExpired);
+        require!(recipient != Pubkey::default(), ReactorError::InvalidRecipient);
+        require!(transfer_lamports > 0 && transfer_lamports <= path.max_transfer_lamports, ReactorError::PathLimitExceeded);
+        require!(exposure_reduction > 0, ReactorError::InvalidExposure);
+
+        let predicted_exposure = vault.exposure
+            .checked_sub(exposure_reduction)
+            .ok_or(ReactorError::ArithmeticOverflow)?;
+        require!(predicted_exposure >= 0, ReactorError::InvalidExposure);
+        require!(predicted_exposure <= objective.target_exposure, ReactorError::PredictedPostconditionFailed);
+
+        let candidate = &mut ctx.accounts.session_candidate;
+        candidate.authority = objective.authority;
+        candidate.path = path.key();
+        candidate.objective = objective.key();
+        candidate.vault = vault.key();
+        candidate.recipient = recipient;
+        candidate.condition_keys = objective.condition_keys;
+        candidate.minimum_remaining_slots = objective.minimum_remaining_slots;
+        candidate.transfer_lamports = transfer_lamports;
+        candidate.exposure_baseline = vault.exposure;
+        candidate.exposure_reduction = exposure_reduction;
+        candidate.predicted_exposure = predicted_exposure;
+        candidate.frozen_sequences = [0; CONDITION_COUNT];
+        candidate.frozen_values = [0; CONDITION_COUNT];
+        candidate.frozen_valid_until_slots = [0; CONDITION_COUNT];
+        candidate.sealed_slot = 0;
+        candidate.ready = false;
+        candidate.bump = ctx.bumps.session_candidate;
+        Ok(())
+    }
+
+    pub fn delegate_condition(ctx: Context<DelegateCondition>, kind: u8) -> Result<()> {
+        require!((kind as usize) < CONDITION_COUNT, ReactorError::InvalidConditionKind);
+        require_keys_eq!(ctx.accounts.condition.objective, ctx.accounts.objective.key(), ReactorError::ConditionObjectiveMismatch);
+        require!(ctx.accounts.condition.kind == kind, ReactorError::ConditionOrderMismatch);
+        let kind_seed = [kind];
+        ctx.accounts.delegate_condition(
+            &ctx.accounts.payer,
+            &[CONDITION_SEED, ctx.accounts.objective.key().as_ref(), &kind_seed],
+            DelegateConfig {
+                validator: ctx.remaining_accounts.first().map(|account| account.key()),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn delegate_session_candidate(ctx: Context<DelegateSessionCandidate>) -> Result<()> {
+        require_keys_eq!(ctx.accounts.session_candidate.objective, ctx.accounts.objective.key(), ReactorError::CandidateObjectiveMismatch);
+        ctx.accounts.delegate_session_candidate(
+            &ctx.accounts.payer,
+            &[SESSION_CANDIDATE_SEED, ctx.accounts.objective.key().as_ref()],
+            DelegateConfig {
+                validator: ctx.remaining_accounts.first().map(|account| account.key()),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn evaluate_session_candidate(
+        ctx: Context<EvaluateSessionCandidate>,
+        expected_sequences: [u64; CONDITION_COUNT],
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let candidate = &mut ctx.accounts.session_candidate;
+        require!(!candidate.ready, ReactorError::CandidateAlreadySealed);
+
+        let conditions = [
+            &ctx.accounts.condition_0,
+            &ctx.accounts.condition_1,
+            &ctx.accounts.condition_2,
+            &ctx.accounts.condition_3,
+            &ctx.accounts.condition_4,
+            &ctx.accounts.condition_5,
+        ];
+        let mut values = [0i64; CONDITION_COUNT];
+        let mut valid_until_slots = [0u64; CONDITION_COUNT];
+
+        for (i, condition) in conditions.iter().enumerate() {
+            require_keys_eq!(candidate.condition_keys[i], condition.key(), ReactorError::ConditionKeyMismatch);
+            require_keys_eq!(condition.objective, candidate.objective, ReactorError::ConditionObjectiveMismatch);
+            require!(condition.kind as usize == i, ReactorError::ConditionOrderMismatch);
+            require!(condition.sequence == expected_sequences[i], ReactorError::SequenceMismatch);
+            require!(condition.predicate_result, ReactorError::PredicateFalse);
+            require!(condition.observed_slot <= clock.slot, ReactorError::InvalidConditionSlot);
+            require!(condition.valid_until_slot > clock.slot, ReactorError::ExpiredCondition);
+            require!(
+                condition.valid_until_slot.saturating_sub(clock.slot) >= candidate.minimum_remaining_slots,
+                ReactorError::InsufficientValidityWindow
+            );
+            values[i] = condition.value;
+            valid_until_slots[i] = condition.valid_until_slot;
+        }
+
+        candidate.frozen_sequences = expected_sequences;
+        candidate.frozen_values = values;
+        candidate.frozen_valid_until_slots = valid_until_slots;
+        candidate.sealed_slot = clock.slot;
+        candidate.ready = true;
+        Ok(())
+    }
+
+    pub fn finalize_session_candidate(ctx: Context<FinalizeSessionCandidate>) -> Result<()> {
+        require!(ctx.accounts.session_candidate.ready, ReactorError::CandidateNotReady);
+        ctx.accounts.session_candidate.exit(&crate::ID)?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[ctx.accounts.session_candidate.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
+    pub fn materialize_lock(ctx: Context<MaterializeLock>) -> Result<()> {
+        let clock = Clock::get()?;
+        let candidate = &ctx.accounts.session_candidate;
+        let objective = &ctx.accounts.objective;
+        let path = &ctx.accounts.path;
+        let vault = &ctx.accounts.vault;
+
+        require!(candidate.ready, ReactorError::CandidateNotReady);
+        require_keys_eq!(candidate.authority, ctx.accounts.payer.key(), ReactorError::CandidateAuthorityMismatch);
+        require_keys_eq!(candidate.path, path.key(), ReactorError::CandidatePathMismatch);
+        require_keys_eq!(candidate.objective, objective.key(), ReactorError::CandidateObjectiveMismatch);
+        require_keys_eq!(candidate.vault, vault.key(), ReactorError::CandidateVaultMismatch);
+        require_keys_eq!(objective.path, path.key(), ReactorError::ObjectivePathMismatch);
+        require_keys_eq!(vault.objective, objective.key(), ReactorError::VaultObjectiveMismatch);
+        require!(candidate.condition_keys == objective.condition_keys, ReactorError::CandidateConditionSetMismatch);
+        require!(clock.slot < path.expires_at_slot, ReactorError::PathExpired);
+        require!(candidate.transfer_lamports > 0 && candidate.transfer_lamports <= path.max_transfer_lamports, ReactorError::PathLimitExceeded);
+        require!(vault.exposure == candidate.exposure_baseline, ReactorError::CandidateVaultBaselineMismatch);
+
+        let predicted_exposure = vault.exposure
+            .checked_sub(candidate.exposure_reduction)
+            .ok_or(ReactorError::ArithmeticOverflow)?;
+        require!(predicted_exposure == candidate.predicted_exposure, ReactorError::CandidatePredictionMismatch);
+        require!(predicted_exposure >= 0, ReactorError::InvalidExposure);
+        require!(predicted_exposure <= objective.target_exposure, ReactorError::PredictedPostconditionFailed);
+
+        let lock = &mut ctx.accounts.execution_lock;
+        lock.objective = objective.key();
+        lock.vault = vault.key();
+        lock.recipient = candidate.recipient;
+        lock.sequences = candidate.frozen_sequences;
+        lock.values = candidate.frozen_values;
+        lock.valid_until_slots = candidate.frozen_valid_until_slots;
+        lock.locked_slot = candidate.sealed_slot;
+        lock.transfer_lamports = candidate.transfer_lamports;
+        lock.exposure_reduction = candidate.exposure_reduction;
+        lock.predicted_exposure = candidate.predicted_exposure;
+        lock.consumed = false;
+        lock.bump = ctx.bumps.execution_lock;
+        Ok(())
+    }
+
     pub fn evaluate_and_lock(
         ctx: Context<EvaluateAndLock>,
         expected_sequences: [u64; CONDITION_COUNT],
@@ -137,10 +315,7 @@ pub mod reactor {
             .checked_sub(exposure_reduction)
             .ok_or(ReactorError::ArithmeticOverflow)?;
         require!(predicted_exposure >= 0, ReactorError::InvalidExposure);
-        require!(
-            predicted_exposure <= objective.target_exposure,
-            ReactorError::PredictedPostconditionFailed
-        );
+        require!(predicted_exposure <= objective.target_exposure, ReactorError::PredictedPostconditionFailed);
 
         let conditions = [
             &ctx.accounts.condition_0,
@@ -299,7 +474,7 @@ pub struct InitializeCondition<'info> {
         init,
         payer = authority,
         space = ConditionState::SPACE,
-        seeds = [b"condition", objective.key().as_ref(), &[kind]],
+        seeds = [CONDITION_SEED, objective.key().as_ref(), &[kind]],
         bump
     )]
     pub condition: Account<'info, ConditionState>,
@@ -315,6 +490,104 @@ pub struct UpdateCondition<'info> {
     #[account(mut)]
     pub condition: Account<'info, ConditionState>,
     pub source: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeSessionCandidate<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = SessionCandidate::SPACE,
+        seeds = [SESSION_CANDIDATE_SEED, objective.key().as_ref()],
+        bump
+    )]
+    pub session_candidate: Account<'info, SessionCandidate>,
+    #[account(has_one = authority)]
+    pub objective: Account<'info, Objective>,
+    #[account(address = objective.path)]
+    pub path: Account<'info, Path>,
+    #[account(address = objective.authority)]
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(address = Pubkey::find_program_address(&[b"vault", objective.key().as_ref()], &crate::ID).0)]
+    pub vault: Account<'info, Vault>,
+    pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(kind: u8)]
+pub struct DelegateCondition<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub objective: Account<'info, Objective>,
+    #[account(
+        mut,
+        del,
+        seeds = [CONDITION_SEED, objective.key().as_ref(), &[kind]],
+        bump
+    )]
+    pub condition: Account<'info, ConditionState>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateSessionCandidate<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub objective: Account<'info, Objective>,
+    #[account(
+        mut,
+        del,
+        seeds = [SESSION_CANDIDATE_SEED, objective.key().as_ref()],
+        bump
+    )]
+    pub session_candidate: Account<'info, SessionCandidate>,
+}
+
+#[derive(Accounts)]
+pub struct EvaluateSessionCandidate<'info> {
+    #[account(mut, seeds = [SESSION_CANDIDATE_SEED, session_candidate.objective.as_ref()], bump = session_candidate.bump)]
+    pub session_candidate: Account<'info, SessionCandidate>,
+    #[account(mut)]
+    pub condition_0: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_1: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_2: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_3: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_4: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_5: Account<'info, ConditionState>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct FinalizeSessionCandidate<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub session_candidate: Account<'info, SessionCandidate>,
+}
+
+#[derive(Accounts)]
+pub struct MaterializeLock<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub path: Account<'info, Path>,
+    pub objective: Account<'info, Objective>,
+    pub vault: Account<'info, Vault>,
+    #[account(
+        seeds = [SESSION_CANDIDATE_SEED, objective.key().as_ref()],
+        bump = session_candidate.bump,
+        constraint = session_candidate.objective == objective.key() @ ReactorError::CandidateObjectiveMismatch
+    )]
+    pub session_candidate: Account<'info, SessionCandidate>,
+    #[account(init, payer = payer, space = ExecutionLock::SPACE, seeds = [b"lock", objective.key().as_ref()], bump)]
+    pub execution_lock: Account<'info, ExecutionLock>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -406,6 +679,37 @@ pub struct ConditionState {
 impl ConditionState { pub const SPACE: usize = 8 + 32 + 32 + 1 + 8 + 8 + 1 + 8 + 8 + 1; }
 
 #[account]
+pub struct SessionCandidate {
+    pub authority: Pubkey,
+    pub path: Pubkey,
+    pub objective: Pubkey,
+    pub vault: Pubkey,
+    pub recipient: Pubkey,
+    pub condition_keys: [Pubkey; CONDITION_COUNT],
+    pub minimum_remaining_slots: u64,
+    pub transfer_lamports: u64,
+    pub exposure_baseline: i64,
+    pub exposure_reduction: i64,
+    pub predicted_exposure: i64,
+    pub frozen_sequences: [u64; CONDITION_COUNT],
+    pub frozen_values: [i64; CONDITION_COUNT],
+    pub frozen_valid_until_slots: [u64; CONDITION_COUNT],
+    pub sealed_slot: u64,
+    pub ready: bool,
+    pub bump: u8,
+}
+impl SessionCandidate {
+    pub const SPACE: usize = 8
+        + (32 * 5)
+        + (32 * CONDITION_COUNT)
+        + (8 * 5)
+        + (8 * CONDITION_COUNT * 3)
+        + 8
+        + 1
+        + 1;
+}
+
+#[account]
 pub struct ExecutionLock {
     pub objective: Pubkey,
     pub vault: Pubkey,
@@ -470,7 +774,17 @@ pub enum ReactorError {
     #[msg("not enough condition validity remains")] InsufficientValidityWindow,
     #[msg("predicted postcondition does not satisfy Objective")] PredictedPostconditionFailed,
     #[msg("invalid transfer amount")] InvalidAmount,
+    #[msg("invalid recipient")] InvalidRecipient,
     #[msg("invalid exposure value")] InvalidExposure,
+    #[msg("session candidate is already sealed")] CandidateAlreadySealed,
+    #[msg("session candidate is not ready")] CandidateNotReady,
+    #[msg("session candidate authority mismatch")] CandidateAuthorityMismatch,
+    #[msg("session candidate Path mismatch")] CandidatePathMismatch,
+    #[msg("session candidate Objective mismatch")] CandidateObjectiveMismatch,
+    #[msg("session candidate Vault mismatch")] CandidateVaultMismatch,
+    #[msg("session candidate condition set mismatch")] CandidateConditionSetMismatch,
+    #[msg("Vault exposure no longer matches sealed candidate baseline")] CandidateVaultBaselineMismatch,
+    #[msg("sealed candidate predicted exposure no longer matches base state")] CandidatePredictionMismatch,
     #[msg("lock has already been consumed")] LockAlreadyConsumed,
     #[msg("lock belongs to another Objective")] LockObjectiveMismatch,
     #[msg("lock belongs to another vault")] LockVaultMismatch,
