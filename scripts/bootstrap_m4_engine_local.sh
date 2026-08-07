@@ -21,6 +21,13 @@ if ! command -v mb-test-validator >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! ephemeral-validator --help 2>&1 | grep -q -- '--no-tui'; then
+  echo "Installed ephemeral-validator does not expose --no-tui." >&2
+  echo "Update it before running the headless M4-Engine bootstrap:" >&2
+  echo "  npm install -g @magicblock-labs/ephemeral-validator@latest" >&2
+  exit 1
+fi
+
 WALLET="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 BASE_RPC="${REACTOR_M4_ENGINE_BASE_RPC:-http://127.0.0.1:8899}"
 BASE_WS="${REACTOR_M4_ENGINE_BASE_WS:-ws://127.0.0.1:8900}"
@@ -299,6 +306,8 @@ printf '%s\n' "Local base WS:    $BASE_WS"
 printf '%s\n' "Local ER RPC:     $ER_RPC"
 printf '%s\n' "Local ER WS:      $ER_WS"
 printf '%s\n' "Trials/path:      $TRIALS"
+printf '%s\n' "ER binary:        $(ephemeral-validator --version 2>/dev/null || echo unknown)"
+printf '%s\n' "ER mode:          headless (--no-tui)"
 
 echo "Deploying Reactor only to the local base validator..."
 solana program deploy "$PROGRAM_SO" \
@@ -307,8 +316,13 @@ solana program deploy "$PROGRAM_SO" \
   --url "$BASE_RPC" >/dev/null
 solana program show "$PROGRAM_ID" --url "$BASE_RPC"
 
-echo "Starting local MagicBlock Ephemeral Rollup..."
-RUST_LOG="${RUST_LOG:-warn}" ephemeral-validator \
+echo "Starting local MagicBlock Ephemeral Rollup in headless mode..."
+# The official quickstart command is interactive. This bootstrap redirects the
+# process into a log file and backgrounds it, so the validator must explicitly
+# disable its terminal UI. MagicBlock's validator CLI exposes --no-tui for this
+# exact headless use case.
+RUST_LOG="${RUST_LOG:-info}" ephemeral-validator \
+  --no-tui \
   --remotes "$BASE_RPC" \
   --remotes "$BASE_WS" \
   -l 7799 \
