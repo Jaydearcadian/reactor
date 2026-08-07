@@ -53,12 +53,30 @@ const conditionPdas = Array.from({ length: CONDITION_COUNT }, (_, kind) =>
 const lockPda = derive(programId, [Buffer.from("lock"), objectivePda.toBuffer()]);
 const receiptPda = derive(programId, [Buffer.from("receipt"), lockPda.toBuffer()]);
 
+async function readSettlementBalances(minContextSlot) {
+  const config = minContextSlot == null
+    ? { commitment: "confirmed" }
+    : { commitment: "confirmed", minContextSlot };
+  const response = await provider.connection.getMultipleAccountsInfoAndContext(
+    [vaultPda, recipient],
+    config,
+  );
+  const [vaultInfo, recipientInfo] = response.value;
+  assert(vaultInfo, "vault account missing during settlement measurement");
+  assert(recipientInfo, "recipient account missing during settlement measurement");
+  return {
+    slot: response.context.slot,
+    vaultLamports: vaultInfo.lamports,
+    recipientLamports: recipientInfo.lamports,
+  };
+}
+
 const startSlot = await provider.connection.getSlot("confirmed");
 const pathExpiry = new anchor.BN(startSlot + 5_000);
 
 // The settlement recipient must already be a valid rent-exempt system account.
-// This setup transfer is intentionally measured before recipientBefore, so the M2
-// assertion still isolates only the Reactor settlement delta.
+// This setup transfer is intentionally measured before the settlement baseline,
+// so the M2 assertion still isolates only the Reactor value movement.
 const recipientRentFloor = await provider.connection.getMinimumBalanceForRentExemption(0);
 await provider.sendAndConfirm(
   new Transaction().add(
@@ -204,8 +222,8 @@ assert(
   "later condition update mutated the lock",
 );
 
-const recipientBefore = await provider.connection.getBalance(recipient, "confirmed");
-await program.methods
+const balancesBefore = await readSettlementBalances();
+const settlementSignature = await program.methods
   .executeLocked()
   .accounts({
     path: pathPda,
@@ -218,13 +236,30 @@ await program.methods
     systemProgram: SystemProgram.programId,
   })
   .rpc();
-const recipientAfter = await provider.connection.getBalance(recipient, "confirmed");
+
+const settlementTransaction = await provider.connection.getTransaction(settlementSignature, {
+  commitment: "confirmed",
+  maxSupportedTransactionVersion: 0,
+});
+assert(settlementTransaction, "confirmed settlement transaction could not be observed");
+const balancesAfter = await readSettlementBalances(settlementTransaction.slot);
+
+const recipientDeltaLamports = balancesAfter.recipientLamports - balancesBefore.recipientLamports;
+const vaultDebitLamports = balancesBefore.vaultLamports - balancesAfter.vaultLamports;
+
+console.log(`settlement signature: ${settlementSignature}`);
+console.log(`settlement slot: ${settlementTransaction.slot}`);
+console.log(`balance read slots: ${balancesBefore.slot} -> ${balancesAfter.slot}`);
+console.log(`vault debit: ${vaultDebitLamports} lamports`);
+console.log(`recipient credit: ${recipientDeltaLamports} lamports`);
 
 const receipt = await program.account.receipt.fetch(receiptPda);
 const vault = await program.account.vault.fetch(vaultPda);
 const consumedLock = await program.account.executionLock.fetch(lockPda);
 
-assert(recipientAfter - recipientBefore === TRANSFER_LAMPORTS, "recipient value delta is wrong");
+assert(vaultDebitLamports === TRANSFER_LAMPORTS, "vault value debit is wrong");
+assert(recipientDeltaLamports === TRANSFER_LAMPORTS, "recipient value credit is wrong");
+assert(vaultDebitLamports === recipientDeltaLamports, "settlement value was not conserved");
 assert(Number(vault.exposure) === TARGET_EXPOSURE, "vault exposure did not reach objective");
 assert(receipt.verified === true, "receipt is not verified");
 assert(Number(receipt.exposureBefore) === INITIAL_EXPOSURE, "receipt before-state is wrong");
@@ -253,7 +288,11 @@ console.log(JSON.stringify({
   falsePredicateRejected: true,
   frozenSequences: expectedSequences,
   laterConditionUpdateIgnoredByFrozenLock: true,
-  recipientDeltaLamports: recipientAfter - recipientBefore,
+  settlementSignature,
+  settlementSlot: settlementTransaction.slot,
+  balanceObservationSlots: [balancesBefore.slot, balancesAfter.slot],
+  vaultDebitLamports,
+  recipientDeltaLamports,
   exposureBefore: Number(receipt.exposureBefore),
   exposureAfter: Number(receipt.exposureAfter),
   receiptVerified: receipt.verified,
