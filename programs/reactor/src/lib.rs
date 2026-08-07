@@ -576,15 +576,15 @@ pub struct FinalizeSessionCandidate<'info> {
 pub struct MaterializeLock<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    pub path: Account<'info, Path>,
-    pub objective: Account<'info, Objective>,
-    pub vault: Account<'info, Vault>,
+    pub path: Box<Account<'info, Path>>,
+    pub objective: Box<Account<'info, Objective>>,
+    pub vault: Box<Account<'info, Vault>>,
     #[account(
         seeds = [SESSION_CANDIDATE_SEED, objective.key().as_ref()],
         bump = session_candidate.bump,
         constraint = session_candidate.objective == objective.key() @ ReactorError::CandidateObjectiveMismatch
     )]
-    pub session_candidate: Account<'info, SessionCandidate>,
+    pub session_candidate: Box<Account<'info, SessionCandidate>>,
     #[account(init, payer = payer, space = ExecutionLock::SPACE, seeds = [b"lock", objective.key().as_ref()], bump)]
     pub execution_lock: Account<'info, ExecutionLock>,
     pub system_program: Program<'info, System>,
