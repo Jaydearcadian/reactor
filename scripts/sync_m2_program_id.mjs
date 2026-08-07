@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { Keypair } from "@solana/web3.js";
 
 const keypairPath = process.env.REACTOR_PROGRAM_KEYPAIR ?? "target/deploy/reactor-keypair.json";
-const sourcePath = "programs/reactor/src/program.rs";
+const sourcePath = "programs/reactor/src/lib.rs";
 
 if (!fs.existsSync(keypairPath)) {
   throw new Error(`missing ${keypairPath}; run 'anchor build' once so Anchor creates the local program keypair`);
