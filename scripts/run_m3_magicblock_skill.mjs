@@ -366,9 +366,10 @@ await updateEr(0, 2, 777, false);
 const candidateAfterMutation = await erProgram.account.sessionCandidate.fetch(candidatePda, "confirmed");
 assert(candidateAfterMutation.frozenSequences.map(Number).join(",") === frozenSequences.join(","), "post-seal condition update mutated candidate");
 
+// MagicBlock commit/undelegate expects the ER provider wallet to be the writable
+// payer/fee-payer. The Reactor authority remains the later base materialization authority.
 const erFinalizeSignature = await send(
-  erProgram.methods.finalizeSessionCandidate().accounts({ payer: authority, sessionCandidate: candidatePda }),
-  [authorityKeypair],
+  erProgram.methods.finalizeSessionCandidate().accounts({ payer: providerPayer, sessionCandidate: candidatePda }),
 );
 await waitForSignature(erConnection, erFinalizeSignature);
 
@@ -467,6 +468,7 @@ const result = {
   frozenSequences,
   postSealMutationDidNotChangeCandidate: true,
   erSealSignature: sealSignature,
+  erFinalizePayer: providerPayer.toBase58(),
   erFinalizeSignature,
   baseCandidateCommitSignature,
   baseCandidateCommitSlot: baseCommitStatus.slot,
