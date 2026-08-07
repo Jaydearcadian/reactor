@@ -1,0 +1,19 @@
+[toolchain]
+anchor_version = "0.32.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+reactor = "9FKmHB6A6WUPpnvEaXfYekHgDvS9cBYY2yA3P4CEaEeD"
+
+[programs.devnet]
+reactor = "9FKmHB6A6WUPpnvEaXfYekHgDvS9cBYY2yA3P4CEaEeD"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "npm run test:m2"
