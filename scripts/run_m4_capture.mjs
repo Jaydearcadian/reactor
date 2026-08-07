@@ -184,14 +184,15 @@ async function createFixture({ baseProgram, baseProvider, baseConnection, provid
 
   const activeConnection = mode === 'magicblock' ? erConnection : baseConnection;
   const activeProgram = mode === 'magicblock' ? erProgram : baseProgram;
+  const validityAnchorSlot = await activeConnection.getSlot('confirmed');
+  const validityUntilSlot = validityAnchorSlot + CONDITION_TTL_SLOTS;
 
   async function update(kind, sequence, predicateResult, measured = false) {
-    const currentSlot = await activeConnection.getSlot('confirmed');
     const builder = activeProgram.methods.updateCondition(
       new anchor.BN(sequence),
       new anchor.BN(100 + kind),
       predicateResult,
-      new anchor.BN(currentSlot + CONDITION_TTL_SLOTS),
+      new anchor.BN(validityUntilSlot),
     ).accounts({ condition: conditionPdas[kind], source: sources[kind].publicKey });
     return measured ? measuredSend(builder, [sources[kind]]) : setupSend(builder, [sources[kind]]);
   }
@@ -203,6 +204,7 @@ async function createFixture({ baseProgram, baseProvider, baseConnection, provid
   return {
     authorityKeypair,
     authority,
+    pathPda,
     recipient,
     objectivePda,
     vaultPda,
@@ -214,6 +216,8 @@ async function createFixture({ baseProgram, baseProvider, baseConnection, provid
     update,
     validator,
     erEndpoint,
+    validityAnchorSlot,
+    validityUntilSlot,
   };
 }
 
@@ -246,7 +250,10 @@ async function runTrial({ mode, windowMs, trialIndex, baseProgram, baseProvider,
     validator: fixture.validator,
     setupExcludedFromTiming: true,
     conditionTtlSlots: CONDITION_TTL_SLOTS,
+    validityAnchorSlot: fixture.validityAnchorSlot,
+    validityUntilSlot: fixture.validityUntilSlot,
     authorityModel: 'independent-source-transactions',
+    measuredPathHasNoSlotLookup: true,
   });
 
   const closePromise = new Promise((resolve) => {
@@ -297,7 +304,7 @@ async function runTrial({ mode, windowMs, trialIndex, baseProgram, baseProvider,
           new anchor.BN(EXPOSURE_REDUCTION),
         ).accounts({
           payer: fixture.authority,
-          path: derive(baseProgram.programId, [Buffer.from('path'), fixture.authority.toBuffer()]),
+          path: fixture.pathPda,
           objective: fixture.objectivePda,
           vault: fixture.vaultPda,
           recipient: fixture.recipient,
@@ -379,6 +386,7 @@ console.log(`paths: ${modes.join(', ')}`);
 console.log(`windows: ${WINDOW_MS.join(', ')} ms`);
 console.log(`trials/window/path: ${TRIALS_PER_WINDOW}`);
 console.log('setup/delegation time is excluded from measured latency');
+console.log('measured source updates use a precomputed validity horizon; no getSlot RPC is inside the timed path');
 
 const trials = [];
 for (const windowMs of WINDOW_MS) {
@@ -413,6 +421,7 @@ const output = {
     fixtureBudgetLamports: FIXTURE_BUDGET_LAMPORTS,
     setupPaceMs: SETUP_PACE_MS,
     conditionTtlSlots: CONDITION_TTL_SLOTS,
+    measuredPathHasNoSlotLookup: true,
   },
   summary: summarizeByBand(trials),
   trials,
