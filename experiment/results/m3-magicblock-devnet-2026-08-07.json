@@ -1,0 +1,11 @@
+{
+  "proofEnvironment": "magicblock-devnet-m3a",
+  "proofScope": "integration-correctness-not-latency-benchmark",
+  "erConditionTtlSlots": 20000,
+  "preferredBaseRpc": "https://rpc.magicblock.app/devnet",
+  "activeBaseRpc": "https://api.devnet.solana.com",
+  "baseRpcFallbackUsed": true,
+  "baseRpcProbeFailures": [
+    {
+      "endpoint": "https://rpc.magicblock.app/devnet",
+      "error": "failed to get balance of account J7stM7qPpGTzuEL
