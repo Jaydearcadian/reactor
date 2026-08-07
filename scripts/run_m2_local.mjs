@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
-import * as anchor from "@coral-xyz/anchor";
+import * as anchorNamespace from "@coral-xyz/anchor";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+
+const anchor = anchorNamespace.default ?? anchorNamespace;
 
 const CONDITION_COUNT = 6;
 const TRANSFER_LAMPORTS = 100_000;
