@@ -8,9 +8,11 @@
   },
   "scripts": {
     "test:live-js": "node --test tests-js/*.test.mjs",
-    "fixture:solana": "node scripts/run_solana_fixture.mjs"
+    "fixture:solana": "node scripts/run_solana_fixture.mjs",
+    "test:m2": "node scripts/run_m2_local.mjs"
   },
   "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
     "@solana/web3.js": "^1.98.4"
   }
 }
