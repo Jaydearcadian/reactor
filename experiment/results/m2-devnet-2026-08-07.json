@@ -1,0 +1,56 @@
+{
+  "artifact": "reactor-m2-solana-devnet-proof",
+  "date": "2026-08-07",
+  "environment": "Solana devnet",
+  "rpcEndpoint": "https://api.devnet.solana.com",
+  "evidenceLevel": "public-testnet execution",
+  "programId": "75ph49gq12tUVV2XAfmDozseGfuu5ZTSZDPB8MPF8oax",
+  "programDeployment": {
+    "deploySignature": "5jjyYmFTizC7fmxqP8nKjuTcVqPATCxTHVdVHPQTVLXkkqag1ZnC3vMaAZzoWr6uT4X8dDx8UwbnVbeSqXcyqyWp",
+    "programDataAddress": "4mGYh9ynWgEZooYJXTv2K1MjstNbmR4x1ZS5aH3vieUv",
+    "upgradeAuthority": "J7stM7qPpGTzuELVvkvCwNjwCkM4hu5sxyhFigeUpJSc",
+    "deployedSlot": 481894224
+  },
+  "proof": {
+    "providerPayer": "J7stM7qPpGTzuELVvkvCwNjwCkM4hu5sxyhFigeUpJSc",
+    "authority": "5qLHz8phBvbiuuP61JB1joDWHZWYCzuEWKvbbBja15kG",
+    "objective": "AdADokhGinTC7bHQ4thTXSFBQZYzCQ5YfuXzjSBxuHDV",
+    "vault": "4fYhP2yLjmLH41Wv9yh3zLDCZfegqoWNqdJKrSWfGfZ1",
+    "staleSequenceRejected": true,
+    "falsePredicateRejected": true,
+    "frozenSequences": [1, 1, 3, 1, 1, 1],
+    "laterConditionUpdateIgnoredByFrozenLock": true,
+    "settlementSignature": "3HkNDWijVUwk4StVAyokiBGnQ5dDpK2zd8ygPnDuDG9nhjGJecYPqm7zQ87bxta8Ek8zKFNPXbKYEMma8diKGSyw",
+    "settlementSlot": 481894440,
+    "balanceObservationSlots": [481894437, 481894443],
+    "vaultDebitLamports": 100000,
+    "recipientDeltaLamports": 100000,
+    "valueConserved": true,
+    "exposureBefore": 700,
+    "exposureAfter": 500,
+    "receiptVerified": true,
+    "lockConsumed": true,
+    "duplicateExecutionRejected": true
+  },
+  "claimBoundary": {
+    "proves": [
+      "The Reactor Anchor program deploys and executes on Solana devnet.",
+      "Stale exact condition versions are rejected on a public Solana cluster.",
+      "A current condition with a false predicate is rejected on a public Solana cluster.",
+      "A valid six-condition configuration creates an immutable exact-version lock.",
+      "Later condition updates do not mutate the accepted lock.",
+      "The locked action conserves value: Vault debit and recipient credit are both exactly 100000 lamports.",
+      "The controlled exposure state moves from 700 to the Objective target of 500.",
+      "The Receipt records verified objective completion.",
+      "The lock is consumed and duplicate execution is rejected."
+    ],
+    "doesNotProve": [
+      "MagicBlock Ephemeral Rollup execution or latency advantage",
+      "Jito comparative performance",
+      "production DEX or market-maker integration",
+      "representative market demand",
+      "production security"
+    ]
+  },
+  "source": "User-executed scripts/bootstrap_m2_devnet.sh output supplied in chat on 2026-08-07."
+}
