@@ -22,3 +22,6 @@ jobs:
           cache: npm
       - run: npm install
       - run: npm run test:live-js
+
+      - name: Check M2 Anchor program
+        run: cargo check --workspace
