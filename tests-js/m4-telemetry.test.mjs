@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TrialTelemetry, percentile, summarizeTrials } from '../src-js/m4-telemetry.mjs';
+import {
+  TrialTelemetry,
+  percentile,
+  summarizeTrials,
+  wilsonInterval95,
+  captureRateDifference95,
+} from '../src-js/m4-telemetry.mjs';
 
 test('TrialTelemetry records monotonic deltas and exact trial state', () => {
   const trial = new TrialTelemetry({
@@ -33,6 +39,20 @@ test('percentile interpolates sorted finite samples', () => {
   assert.equal(percentile([10, 20, 30, 40], 0.5), 25);
 });
 
+test('Wilson interval remains bounded and includes observed rate', () => {
+  const interval = wilsonInterval95(8, 10);
+  assert.ok(interval.lower >= 0);
+  assert.ok(interval.upper <= 1);
+  assert.ok(interval.lower <= 0.8 && interval.upper >= 0.8);
+});
+
+test('capture-rate difference reports treatment minus baseline', () => {
+  const result = captureRateDifference95(8, 10, 4, 10);
+  assert.ok(Math.abs(result.difference - 0.4) < 1e-12);
+  assert.ok(result.lower <= result.difference);
+  assert.ok(result.upper >= result.difference);
+});
+
 test('summarizeTrials separates capture from verified outcome and false locks', () => {
   const trials = [
     { capture: true, exactVersionMatch: true, verifiedObjective: true, falseLock: false, latency: { captureMs: 10, verifiedMs: 100 } },
@@ -48,4 +68,6 @@ test('summarizeTrials separates capture from verified outcome and false locks', 
   assert.equal(summary.captureRate, 2 / 3);
   assert.equal(summary.verifiedCaptureRate, 1 / 3);
   assert.equal(summary.falseLockRate, 1 / 3);
+  assert.ok(summary.captureRate95.lower <= summary.captureRate);
+  assert.ok(summary.captureRate95.upper >= summary.captureRate);
 });
