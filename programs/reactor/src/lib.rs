@@ -165,8 +165,14 @@ pub mod reactor {
 
     pub fn delegate_condition(ctx: Context<DelegateCondition>, kind: u8) -> Result<()> {
         require!((kind as usize) < CONDITION_COUNT, ReactorError::InvalidConditionKind);
-        require_keys_eq!(ctx.accounts.condition.objective, ctx.accounts.objective.key(), ReactorError::ConditionObjectiveMismatch);
-        require!(ctx.accounts.condition.kind == kind, ReactorError::ConditionOrderMismatch);
+        require_keys_eq!(*ctx.accounts.condition.owner, crate::ID, ReactorError::ConditionObjectiveMismatch);
+        {
+            let data = ctx.accounts.condition.try_borrow_data()?;
+            let mut data_slice: &[u8] = &data;
+            let condition = ConditionState::try_deserialize(&mut data_slice)?;
+            require_keys_eq!(condition.objective, ctx.accounts.objective.key(), ReactorError::ConditionObjectiveMismatch);
+            require!(condition.kind == kind, ReactorError::ConditionOrderMismatch);
+        }
         let kind_seed = [kind];
         ctx.accounts.delegate_condition(
             &ctx.accounts.payer,
@@ -180,7 +186,13 @@ pub mod reactor {
     }
 
     pub fn delegate_session_candidate(ctx: Context<DelegateSessionCandidate>) -> Result<()> {
-        require_keys_eq!(ctx.accounts.session_candidate.objective, ctx.accounts.objective.key(), ReactorError::CandidateObjectiveMismatch);
+        require_keys_eq!(*ctx.accounts.session_candidate.owner, crate::ID, ReactorError::CandidateObjectiveMismatch);
+        {
+            let data = ctx.accounts.session_candidate.try_borrow_data()?;
+            let mut data_slice: &[u8] = &data;
+            let candidate = SessionCandidate::try_deserialize(&mut data_slice)?;
+            require_keys_eq!(candidate.objective, ctx.accounts.objective.key(), ReactorError::CandidateObjectiveMismatch);
+        }
         ctx.accounts.delegate_session_candidate(
             &ctx.accounts.payer,
             &[SESSION_CANDIDATE_SEED, ctx.accounts.objective.key().as_ref()],
@@ -521,13 +533,14 @@ pub struct DelegateCondition<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     pub objective: Account<'info, Objective>,
+    /// CHECK: PDA seeds constrain this account. State is manually deserialized before delegation.
     #[account(
         mut,
         del,
         seeds = [CONDITION_SEED, objective.key().as_ref(), &[kind]],
         bump
     )]
-    pub condition: Account<'info, ConditionState>,
+    pub condition: UncheckedAccount<'info>,
 }
 
 #[delegate]
@@ -536,13 +549,14 @@ pub struct DelegateSessionCandidate<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     pub objective: Account<'info, Objective>,
+    /// CHECK: PDA seeds constrain this account. State is manually deserialized before delegation.
     #[account(
         mut,
         del,
         seeds = [SESSION_CANDIDATE_SEED, objective.key().as_ref()],
         bump
     )]
-    pub session_candidate: Account<'info, SessionCandidate>,
+    pub session_candidate: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
