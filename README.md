@@ -4,7 +4,7 @@
 
 Reactor observes independently changing execution conditions, determines when they are jointly executable under one bounded objective, freezes the exact compatible state versions into an immutable lock, and separates transaction submission from verified objective completion.
 
-> Status: M1 product hypothesis, X1 deterministic local fixture, and X2/X3 measurement harness scaffold. No MagicBlock, Solana, Jito, latency advantage, market demand, or production-security claim is proven by this repository yet.
+> Status: M1 product hypothesis and deterministic fixture are implemented; M2 now has a real Anchor/Solana executability-lock program plus an adversarial local-validator runner. M2 is not yet counted as demonstrated until the program compiles and the local/devnet acceptance gate passes. No MagicBlock, Jito, latency advantage, market demand, or production-security claim is proven yet.
 
 ## The thesis
 
@@ -14,7 +14,7 @@ The durable product direction is broader:
 
 > Transactions are attempts. Reactor is being built so execution objectives can survive changing conditions and, later, failed attempts.
 
-The hackathon proof is deliberately narrower:
+The current primitive is narrower:
 
 ```text
 Objective + Path
@@ -23,28 +23,58 @@ authenticated condition updates
       ↓
 joint executability evaluation
       ↓
-immutable version lock
+immutable exact-version lock
       ↓
-attempt → observation → verification
+bounded economic action
+      ↓
+postcondition verification
+      ↓
+Receipt
 ```
 
-## What exists now
+## M2 — Real Executability Lock
 
-- canonical Product Truth;
-- falsifiable thesis and null hypothesis;
-- controlled experiment protocol;
-- lifecycle and state-machine specification;
-- deterministic condition/lock engine;
-- fair delayed-observer baseline model;
-- local scenario runner across multiple overlap durations;
-- invariant tests for stale updates, invalidation, immutable locks, duplicate prevention, verification, failure, and Gaia classification;
-- monotonic live telemetry recorder;
-- strict `SUBMITTED → ACKNOWLEDGED → OBSERVED → VERIFIED` evidence states;
-- dependency-free JSON-RPC connectivity probe;
-- live benchmark contract for standard Solana, Jito, and MagicBlock Reactor;
-- evidence-bounded whitepaper skeleton.
+The Anchor program in `programs/reactor/` introduces real Solana accounts for:
 
-## Run the local fixture
+- `Path` — standing authority, transfer limit, expiry;
+- `Objective` — target postcondition and canonical condition set;
+- `ConditionState` — independently authorized, monotonically versioned state;
+- `Vault` — Reactor-owned lamports and fixture exposure;
+- `ExecutionLock` — immutable condition versions, values, recipient, action and predicted postcondition;
+- `Receipt` — verified before/after outcome evidence.
+
+The first controlled economic fixture uses native SOL rather than SPL tokens or an external DEX. This proves actual value movement while keeping token and venue behavior outside the primitive test.
+
+See `M2_EXECUTABILITY_LOCK.md` for the full acceptance gate.
+
+## M2 adversarial proof
+
+The local runner deliberately attempts to break the lock before accepting the happy path:
+
+```text
+six conditions valid
+→ one condition advances to a false version
+→ stale-version lock attempt must fail
+→ exact false-predicate lock attempt must fail
+→ source publishes a new valid version
+→ exact versions lock
+→ another condition changes after the lock
+→ frozen lock remains unchanged
+→ SOL moves from Vault to frozen recipient
+→ exposure reaches Objective target
+→ Receipt verifies postcondition
+→ duplicate execution fails
+```
+
+With Rust, Solana CLI, Anchor 0.32.1+, Node and npm installed:
+
+```bash
+bash scripts/bootstrap_m2_local.sh
+```
+
+The script keeps deployment key material local. The first Anchor build creates the local program keypair, `sync_m2_program_id.mjs` aligns `declare_id!` with it, the program rebuilds, and `anchor test` runs the adversarial proof.
+
+## Deterministic experiment fixture
 
 Requires Python 3.11+ and no third-party dependencies.
 
@@ -53,11 +83,20 @@ python -m unittest discover -s tests -v
 python scripts/run_experiment.py
 ```
 
-The experiment runner writes a JSON result to `experiment/results/latest.json`.
+The experiment runner writes `experiment/results/latest.json`.
 
-## Probe live RPC endpoints
+## Live measurement harness
 
-Connectivity is not execution evidence, but it is the first live integration check.
+The repository also contains:
+
+- monotonic live telemetry;
+- strict `SUBMITTED → ACKNOWLEDGED → OBSERVED → VERIFIED` evidence states;
+- JSON-RPC connectivity probes;
+- a signed standard-Solana transfer fixture;
+- a shared signed-transaction artifact format;
+- the benchmark contract in `LIVE_BENCHMARK.md`.
+
+Probe endpoints with:
 
 ```bash
 export SOLANA_RPC_URL="<solana-json-rpc-endpoint>"
@@ -65,29 +104,31 @@ export MAGICBLOCK_RPC_URL="<magicblock-json-rpc-endpoint>"
 python scripts/probe_live_paths.py
 ```
 
-The probe writes `experiment/results/live-probe.json` and records monotonic request timing. A successful RPC response must never be counted as a successful execution.
-
-See `LIVE_BENCHMARK.md` for the evidence contract required before an X3 claim is allowed.
+Connectivity is not execution evidence. An RPC or bundle acknowledgement must never be counted as verified execution.
 
 ## Evidence boundary
 
-The current simulator and measurement harness can show that:
+The repository currently supports these claims at source/model level:
 
-- compatible condition versions can be evaluated deterministically;
-- expired, invalid, missing, or stale conditions cannot create a lock;
-- an accepted lock remains immutable after later updates;
-- duplicate evaluation cannot create duplicate effects;
-- `SUBMITTED`, `ACKNOWLEDGED`, `OBSERVED`, and `VERIFIED` are distinct evidence states;
-- a latency-sensitive comparison can be represented reproducibly;
-- network probes can record transport timing without overstating execution success.
+- exact condition versions can be bound into an immutable lock;
+- replayed or stale sequences are rejected;
+- false or expired conditions cannot lock;
+- Objective, Path and Vault relationships are explicitly bound;
+- a lock cannot be created if its predicted postcondition cannot satisfy the Objective;
+- later condition updates do not substitute themselves into an accepted lock;
+- bounded program-owned SOL can be moved only through the frozen action;
+- duplicate execution is blocked;
+- `SUBMITTED`, `ACKNOWLEDGED`, `OBSERVED`, and `VERIFIED` remain separate evidence states.
 
-It cannot yet show that:
+The repository does **not** yet prove:
 
-- representative onchain overlaps are commercially valuable;
-- Solana or Jito misses them at a material rate;
-- MagicBlock captures them more reliably;
-- external protocol state can be safely reserved or carried into settlement;
-- Reactor is production-safe.
+- that the Anchor program has passed the M2 local-validator gate;
+- devnet M2 execution;
+- representative market-maker demand;
+- material Solana/Jito miss rates;
+- MagicBlock capture superiority;
+- arbitrary external DEX state reservation;
+- production security.
 
 ## Repository map
 
@@ -97,29 +138,36 @@ reactor/
 ├── THESIS.md
 ├── EXPERIMENT_PROTOCOL.md
 ├── STATE_MACHINE.md
+├── M2_EXECUTABILITY_LOCK.md
 ├── LIVE_BENCHMARK.md
 ├── WHITEPAPER.md
+├── Anchor.toml
+├── Cargo.toml
+├── programs/reactor/
+│   ├── Cargo.toml
+│   └── src/program.rs
 ├── src/reactor/
-│   ├── engine.py
-│   ├── experiment.py
-│   ├── live_paths.py
-│   ├── model.py
-│   ├── rpc.py
-│   └── telemetry.py
 ├── scripts/
+│   ├── bootstrap_m2_local.sh
+│   ├── run_m2_local.mjs
+│   ├── sync_m2_program_id.mjs
 │   ├── run_experiment.py
+│   ├── run_solana_fixture.mjs
 │   └── probe_live_paths.py
 ├── tests/
+├── tests-js/
 ├── experiment/results/
 └── .github/workflows/test.yml
 ```
 
 ## Next proof
 
-Implement signed execution adapters for three measured paths receiving the same authenticated condition stream:
+The immediate gate is now concrete:
 
-1. standard Solana submission;
-2. optimized/Jito submission;
-3. MagicBlock Reactor commit + base-layer execution.
+1. pass `cargo check --workspace`;
+2. pass the adversarial local-validator M2 runner;
+3. repeat the same M2 lifecycle on Solana devnet;
+4. record raw transaction and postcondition evidence;
+5. only then delegate the hot `ConditionState` evaluation path into MagicBlock and measure what the ER changes.
 
-The primary metric is **verified valid-window capture rate**. The non-negotiable safety metric is **zero false locks**.
+The primary later benchmark metric remains **verified valid-window capture rate**. The non-negotiable safety metric remains **zero false locks**.
