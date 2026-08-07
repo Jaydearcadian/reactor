@@ -46,7 +46,7 @@ PLANNED_FIXTURE_LAMPORTS=$((FIXTURE_COUNT * FIXTURE_BUDGET_LAMPORTS))
 MIN_BALANCE=$((PLANNED_FIXTURE_LAMPORTS + PAYER_RESERVE_LAMPORTS))
 
 printf '%s\n' "M4 does NOT rebuild or redeploy Reactor."
-printf '%s\n' "M4 runner:       prebuilt/pre-signed + warmed account subscriptions"
+printf '%s\n' "M4 runner:       prebuilt/pre-signed + pre-warmed account/signature subscriptions"
 printf '%s\n' "Base RPC:        $BASE_RPC"
 printf '%s\n' "Program ID:      $PROGRAM_ID"
 printf '%s\n' "Payer:           $PAYER"
@@ -80,7 +80,7 @@ export REACTOR_M4_WINDOWS_MS="$WINDOWS"
 export REACTOR_M4_TRIALS_PER_WINDOW="$TRIALS_PER_WINDOW"
 export REACTOR_M4_FIXTURE_BUDGET_LAMPORTS="$FIXTURE_BUDGET_LAMPORTS"
 
-node scripts/run_m4_capture_ws.mjs
+node scripts/run_m4_capture_signal.mjs
 node scripts/analyze_m4_capture.mjs
 
 echo
