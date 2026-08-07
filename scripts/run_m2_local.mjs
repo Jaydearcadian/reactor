@@ -29,6 +29,23 @@ function derive(programId, seeds) {
   return PublicKey.findProgramAddressSync(seeds, programId)[0];
 }
 
+async function waitForSignatureStatus(signature) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const response = await provider.connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const status = response.value[0];
+    if (status) {
+      assert(status.err == null, `settlement transaction failed: ${JSON.stringify(status.err)}`);
+      if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") {
+        return status;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("confirmed settlement signature status could not be observed");
+}
+
 const idlPath = process.env.REACTOR_IDL ?? "target/idl/reactor.json";
 if (!fs.existsSync(idlPath)) {
   throw new Error(`missing ${idlPath}; run 'anchor build', 'anchor keys sync', then 'anchor build'`);
@@ -237,18 +254,15 @@ const settlementSignature = await program.methods
   })
   .rpc();
 
-const settlementTransaction = await provider.connection.getTransaction(settlementSignature, {
-  commitment: "confirmed",
-  maxSupportedTransactionVersion: 0,
-});
-assert(settlementTransaction, "confirmed settlement transaction could not be observed");
-const balancesAfter = await readSettlementBalances(settlementTransaction.slot);
+const settlementStatus = await waitForSignatureStatus(settlementSignature);
+const settlementSlot = settlementStatus.slot;
+const balancesAfter = await readSettlementBalances(settlementSlot);
 
 const recipientDeltaLamports = balancesAfter.recipientLamports - balancesBefore.recipientLamports;
 const vaultDebitLamports = balancesBefore.vaultLamports - balancesAfter.vaultLamports;
 
 console.log(`settlement signature: ${settlementSignature}`);
-console.log(`settlement slot: ${settlementTransaction.slot}`);
+console.log(`settlement slot: ${settlementSlot}`);
 console.log(`balance read slots: ${balancesBefore.slot} -> ${balancesAfter.slot}`);
 console.log(`vault debit: ${vaultDebitLamports} lamports`);
 console.log(`recipient credit: ${recipientDeltaLamports} lamports`);
@@ -289,7 +303,7 @@ console.log(JSON.stringify({
   frozenSequences: expectedSequences,
   laterConditionUpdateIgnoredByFrozenLock: true,
   settlementSignature,
-  settlementSlot: settlementTransaction.slot,
+  settlementSlot,
   balanceObservationSlots: [balancesBefore.slot, balancesAfter.slot],
   vaultDebitLamports,
   recipientDeltaLamports,
