@@ -10,7 +10,8 @@
     "test:live-js": "node --test tests-js/*.test.mjs",
     "fixture:solana": "node scripts/run_solana_fixture.mjs",
     "test:m2": "node scripts/run_m2_local.mjs",
-    "test:m2:proof": "node scripts/run_m2_proof.mjs"
+    "test:m2:proof": "node scripts/run_m2_proof.mjs",
+    "test:m3": "node scripts/run_m3_magicblock.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
