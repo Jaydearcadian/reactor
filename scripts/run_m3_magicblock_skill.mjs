@@ -22,10 +22,12 @@ const INITIAL_EXPOSURE = 700;
 const TARGET_EXPOSURE = 500;
 const EXPOSURE_REDUCTION = 200;
 const AUTHORITY_BUDGET_LAMPORTS = Math.floor(0.5 * LAMPORTS_PER_SOL);
-const BASE_RPC = process.env.REACTOR_BASE_RPC ?? "https://rpc.magicblock.app/devnet";
+const PREFERRED_BASE_RPC = process.env.REACTOR_BASE_RPC ?? "https://rpc.magicblock.app/devnet";
+const FALLBACK_BASE_RPC = process.env.REACTOR_FALLBACK_BASE_RPC ?? "https://api.devnet.solana.com";
 const ROUTER_RPC = process.env.REACTOR_ROUTER_RPC ?? "https://devnet-router.magicblock.app/";
 const ER_OVERRIDE = process.env.REACTOR_ER_RPC ?? null;
 const RPC_PACE_MS = Number(process.env.REACTOR_RPC_PACE_MS ?? 350);
+const BASE_PROBE_TIMEOUT_MS = Number(process.env.REACTOR_BASE_PROBE_TIMEOUT_MS ?? 8_000);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -37,6 +39,45 @@ function sleep(ms) {
 
 async function pace() {
   if (RPC_PACE_MS > 0) await sleep(RPC_PACE_MS);
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function selectBaseConnection(payer) {
+  const endpoints = [...new Set([PREFERRED_BASE_RPC, FALLBACK_BASE_RPC].filter(Boolean))];
+  const failures = [];
+
+  for (const endpoint of endpoints) {
+    const connection = new Connection(endpoint, "confirmed");
+    try {
+      const [genesisHash, balance] = await withTimeout(
+        Promise.all([
+          connection.getGenesisHash(),
+          connection.getBalance(payer, "confirmed"),
+        ]),
+        BASE_PROBE_TIMEOUT_MS,
+        `base RPC probe ${endpoint}`,
+      );
+      return { connection, endpoint, genesisHash, balance, failures };
+    } catch (error) {
+      failures.push({ endpoint, error: String(error?.message ?? error) });
+      console.warn(`base RPC unavailable: ${endpoint}: ${error?.message ?? error}`);
+    }
+  }
+
+  throw new Error(`no usable Solana base RPC: ${JSON.stringify(failures)}`);
 }
 
 async function expectFailure(label, fn) {
@@ -159,7 +200,10 @@ const idl = JSON.parse(fs.readFileSync(idlPath, "utf8"));
 
 const envProvider = anchor.AnchorProvider.env();
 const wallet = envProvider.wallet;
-const baseConnection = new Connection(BASE_RPC, "confirmed");
+const providerPayer = wallet.publicKey;
+const baseSelection = await selectBaseConnection(providerPayer);
+const baseConnection = baseSelection.connection;
+const ACTIVE_BASE_RPC = baseSelection.endpoint;
 const baseProvider = new anchor.AnchorProvider(baseConnection, wallet, {
   commitment: "confirmed",
   preflightCommitment: "confirmed",
@@ -167,7 +211,6 @@ const baseProvider = new anchor.AnchorProvider(baseConnection, wallet, {
 const baseProgram = new anchor.Program(idl, baseProvider);
 const programId = baseProgram.programId;
 
-const providerPayer = wallet.publicKey;
 const authorityKeypair = Keypair.generate();
 const authority = authorityKeypair.publicKey;
 const recipient = Keypair.generate().publicKey;
@@ -185,7 +228,7 @@ const candidatePda = derive(programId, [Buffer.from("session_candidate"), object
 const lockPda = derive(programId, [Buffer.from("lock"), objectivePda.toBuffer()]);
 const receiptPda = derive(programId, [Buffer.from("receipt"), lockPda.toBuffer()]);
 
-const providerBalance = await baseConnection.getBalance(providerPayer, "confirmed");
+const providerBalance = baseSelection.balance;
 assert(providerBalance >= AUTHORITY_BUDGET_LAMPORTS, "provider payer lacks enough devnet SOL for M3 fixture");
 const recipientRentFloor = await baseConnection.getMinimumBalanceForRentExemption(0);
 await baseProvider.sendAndConfirm(
@@ -200,14 +243,19 @@ await pace();
 const startSlot = await baseConnection.getSlot("confirmed");
 const pathExpiry = new anchor.BN(startSlot + 5_000);
 
-console.log(`base rpc:   ${BASE_RPC}`);
-console.log(`router rpc: ${ROUTER_RPC}`);
-console.log(`program:    ${programId}`);
-console.log(`payer:      ${providerPayer}`);
-console.log(`authority:  ${authority}`);
-console.log(`objective:  ${objectivePda}`);
-console.log(`vault:      ${vaultPda}`);
-console.log(`candidate:  ${candidatePda}`);
+console.log(`preferred base rpc: ${PREFERRED_BASE_RPC}`);
+console.log(`active base rpc:    ${ACTIVE_BASE_RPC}`);
+console.log(`base genesis:       ${baseSelection.genesisHash}`);
+if (baseSelection.failures.length > 0) {
+  console.log(`base fallback used: ${JSON.stringify(baseSelection.failures)}`);
+}
+console.log(`router rpc:         ${ROUTER_RPC}`);
+console.log(`program:            ${programId}`);
+console.log(`payer:              ${providerPayer}`);
+console.log(`authority:          ${authority}`);
+console.log(`objective:          ${objectivePda}`);
+console.log(`vault:              ${vaultPda}`);
+console.log(`candidate:          ${candidatePda}`);
 
 await send(baseProgram.methods.initializePath(new anchor.BN(1_000_000), pathExpiry)
   .accounts({ path: pathPda, authority, systemProgram: SystemProgram.programId }), [authorityKeypair]);
@@ -317,7 +365,7 @@ const erFinalizeSignature = await send(
 await waitForSignature(erConnection, erFinalizeSignature);
 
 // An ER signature only proves the intent was scheduled. Extract the actual Solana
-// commitment signature and confirm it independently on the base connection.
+// commitment signature and confirm it independently on the active base connection.
 const baseCandidateCommitSignature = await GetCommitmentSignature(erFinalizeSignature, erConnection);
 assert(baseCandidateCommitSignature, "MagicBlock did not expose a base commitment signature");
 const baseCommitStatus = await waitForSignature(baseConnection, baseCandidateCommitSignature);
@@ -379,7 +427,11 @@ await expectFailure("duplicate execution", () =>
 
 const result = {
   proofEnvironment: "magicblock-devnet-m3a",
-  baseRpc: BASE_RPC,
+  preferredBaseRpc: PREFERRED_BASE_RPC,
+  activeBaseRpc: ACTIVE_BASE_RPC,
+  baseRpcFallbackUsed: ACTIVE_BASE_RPC !== PREFERRED_BASE_RPC,
+  baseRpcProbeFailures: baseSelection.failures,
+  baseGenesisHash: baseSelection.genesisHash,
   routerRpc: ROUTER_RPC,
   ephemeralRpc: erEndpoint,
   validator,
