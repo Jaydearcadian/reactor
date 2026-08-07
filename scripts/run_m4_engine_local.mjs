@@ -13,6 +13,10 @@ import {
 const anchor = anchorNamespace.default ?? anchorNamespace;
 const CONDITION_COUNT = 6;
 const EXPECTED_SEQUENCES = [1, 1, 2, 1, 1, 1];
+const INITIAL_EXPOSURE = 700;
+const TARGET_EXPOSURE = 500;
+const EXPOSURE_REDUCTION = 200;
+const TRANSFER_LAMPORTS = 100_000;
 const LOCAL_BASE_RPC = process.env.REACTOR_M4_ENGINE_BASE_RPC ?? 'http://127.0.0.1:8899';
 const LOCAL_BASE_WS = process.env.REACTOR_M4_ENGINE_BASE_WS ?? 'ws://127.0.0.1:8900';
 const LOCAL_ER_RPC = process.env.REACTOR_M4_ENGINE_ER_RPC ?? 'http://127.0.0.1:7799';
@@ -21,7 +25,7 @@ const LOCAL_ER_VALIDATOR = new PublicKey(
   process.env.REACTOR_M4_ENGINE_ER_VALIDATOR ?? 'mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev',
 );
 const TRIALS = Number(process.env.REACTOR_M4_ENGINE_TRIALS ?? 10);
-const FIXTURE_LAMPORTS = Number(process.env.REACTOR_M4_ENGINE_FIXTURE_LAMPORTS ?? 20_000_000);
+const FIXTURE_LAMPORTS = Number(process.env.REACTOR_M4_ENGINE_FIXTURE_LAMPORTS ?? 80_000_000);
 const CONDITION_TTL_SLOTS = Number(process.env.REACTOR_M4_ENGINE_CONDITION_TTL_SLOTS ?? 20_000);
 const SUBSCRIPTION_WARM_MS = Number(process.env.REACTOR_M4_ENGINE_SUBSCRIPTION_WARM_MS ?? 100);
 const OBSERVATION_TIMEOUT_MS = Number(process.env.REACTOR_M4_ENGINE_OBSERVATION_TIMEOUT_MS ?? 5000);
@@ -244,15 +248,18 @@ async function createFixture({ mode, baseProgram, baseProvider, baseConnection, 
   }
 
   await setupSend(
-    baseProgram.methods.initializeSessionCandidate(recipient, new anchor.BN(100_000), new anchor.BN(200))
-      .accounts({
-        sessionCandidate: candidatePda,
-        objective: objectivePda,
-        path: pathPda,
-        authority,
-        vault: vaultPda,
-        systemProgram: SystemProgram.programId,
-      }),
+    baseProgram.methods.initializeSessionCandidate(
+      recipient,
+      new anchor.BN(TRANSFER_LAMPORTS),
+      new anchor.BN(EXPOSURE_REDUCTION),
+    ).accounts({
+      sessionCandidate: candidatePda,
+      objective: objectivePda,
+      path: pathPda,
+      authority,
+      vault: vaultPda,
+      systemProgram: SystemProgram.programId,
+    }),
     [authorityKeypair],
   );
 
@@ -379,7 +386,6 @@ async function runTrial({ mode, index, baseProgram, baseProvider, baseConnection
     if (!failure) failure = `candidate verification failed: ${error?.message ?? error}`;
   }
 
-  // Mutate a different source after sealing and prove the candidate remains frozen.
   let postSealImmutable = false;
   if (exactVersionMatch) {
     try {
@@ -459,6 +465,7 @@ console.log(`er:      ${LOCAL_ER_RPC}`);
 console.log(`er ws:   ${LOCAL_ER_WS}`);
 console.log(`validator: ${LOCAL_ER_VALIDATOR}`);
 console.log(`trials/path: ${TRIALS}`);
+console.log(`fixture: exposure ${INITIAL_EXPOSURE}->${TARGET_EXPOSURE}, reduction=${EXPOSURE_REDUCTION}, transfer=${TRANSFER_LAMPORTS} lamports`);
 console.log('measurement: prebuilt atomic update+seal send -> processed signature notification');
 
 const trials = [];
@@ -498,6 +505,11 @@ const result = {
     erWs: LOCAL_ER_WS,
     erValidator: LOCAL_ER_VALIDATOR.toBase58(),
     trialsPerPath: TRIALS,
+    fixtureLamports: FIXTURE_LAMPORTS,
+    initialExposure: INITIAL_EXPOSURE,
+    targetExposure: TARGET_EXPOSURE,
+    exposureReduction: EXPOSURE_REDUCTION,
+    transferLamports: TRANSFER_LAMPORTS,
     primitive: 'atomic-update-condition-plus-evaluate-session-candidate',
   },
   summary: {
