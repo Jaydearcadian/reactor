@@ -13,7 +13,8 @@
     "test:m2:proof": "node scripts/run_m2_proof.mjs",
     "test:m3": "node scripts/run_m3_magicblock_skill.mjs",
     "test:m4:telemetry": "node --test tests-js/m4-telemetry.test.mjs",
-    "benchmark:m4": "node scripts/run_m4_capture.mjs",
+    "benchmark:m4": "node scripts/run_m4_capture_atomic.mjs",
+    "benchmark:m4:engine": "node scripts/run_m4_engine_local.mjs",
     "analyze:m4": "node scripts/analyze_m4_capture.mjs"
   },
   "dependencies": {
