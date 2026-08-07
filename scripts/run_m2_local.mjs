@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import * as anchorNamespace from "@coral-xyz/anchor";
-import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
 const anchor = anchorNamespace.default ?? anchorNamespace;
 
@@ -56,11 +56,27 @@ const receiptPda = derive(programId, [Buffer.from("receipt"), lockPda.toBuffer()
 const startSlot = await provider.connection.getSlot("confirmed");
 const pathExpiry = new anchor.BN(startSlot + 5_000);
 
+// The settlement recipient must already be a valid rent-exempt system account.
+// This setup transfer is intentionally measured before recipientBefore, so the M2
+// assertion still isolates only the Reactor settlement delta.
+const recipientRentFloor = await provider.connection.getMinimumBalanceForRentExemption(0);
+await provider.sendAndConfirm(
+  new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: authority,
+      toPubkey: recipient,
+      lamports: recipientRentFloor,
+    }),
+  ),
+  [],
+);
+
 console.log(`program:   ${programId}`);
 console.log(`authority: ${authority}`);
 console.log(`objective: ${objectivePda}`);
 console.log(`vault:     ${vaultPda}`);
 console.log(`recipient: ${recipient}`);
+console.log(`recipient rent floor: ${recipientRentFloor} lamports`);
 
 await program.methods
   .initializePath(new anchor.BN(1_000_000), pathExpiry)
