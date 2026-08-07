@@ -6,9 +6,8 @@ command -v solana >/dev/null 2>&1 || { echo "solana CLI is required" >&2; exit 1
 command -v npm >/dev/null 2>&1 || { echo "npm is required" >&2; exit 1; }
 command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
 
-BASE_RPC="${REACTOR_BASE_RPC:-https://api.devnet.solana.com}"
-ER_RPC="${REACTOR_ER_RPC:-https://devnet.magicblock.app/}"
-ER_WS="${REACTOR_ER_WS:-wss://devnet.magicblock.app/}"
+BASE_RPC="${REACTOR_BASE_RPC:-https://rpc.magicblock.app/devnet}"
+ROUTER_RPC="${REACTOR_ROUTER_RPC:-https://devnet-router.magicblock.app/}"
 WALLET="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 
 if [[ ! -f "$WALLET" ]]; then
@@ -26,11 +25,11 @@ PAYER="$(solana address -k "$WALLET")"
 BALANCE="$(solana balance "$PAYER" --url "$BASE_RPC" --lamports | awk '{print $1}')"
 TARGET_LAMPORTS=3500000000
 
-echo "Solana devnet: $BASE_RPC"
-echo "MagicBlock ER:  $ER_RPC"
-echo "Payer:          $PAYER"
-echo "Program ID:     $PROGRAM_ID"
-echo "Balance:        $BALANCE lamports"
+echo "MagicBlock base:   $BASE_RPC"
+echo "MagicBlock router: $ROUTER_RPC"
+echo "Payer:             $PAYER"
+echo "Program ID:        $PROGRAM_ID"
+echo "Balance:           $BALANCE lamports"
 
 if (( BALANCE < TARGET_LAMPORTS )); then
   echo "Payer has less than 3.5 SOL; attempting devnet faucet top-up."
@@ -53,17 +52,18 @@ fi
 export ANCHOR_PROVIDER_URL="$BASE_RPC"
 export ANCHOR_WALLET="$WALLET"
 export REACTOR_BASE_RPC="$BASE_RPC"
-export REACTOR_ER_RPC="$ER_RPC"
-export REACTOR_ER_WS="$ER_WS"
+export REACTOR_ROUTER_RPC="$ROUTER_RPC"
+unset REACTOR_ER_RPC || true
+unset REACTOR_ER_WS || true
 
-echo "Deploying/upgrading Reactor M3a on Solana devnet..."
+echo "Deploying/upgrading Reactor M3a on MagicBlock-compatible Solana devnet RPC..."
 anchor deploy --provider.cluster "$BASE_RPC" --provider.wallet "$WALLET"
 
 echo "Verifying deployed program account..."
 solana program show "$PROGRAM_ID" --url "$BASE_RPC"
 
-echo "Running MagicBlock M3a proof..."
-node scripts/run_m3_magicblock.mjs
+echo "Running router-aware MagicBlock M3a proof..."
+node scripts/run_m3_magicblock_skill.mjs
 
 echo
- echo "M3a proof artifact: experiment/results/m3-magicblock-latest.json"
+echo "M3a proof artifact: experiment/results/m3-magicblock-latest.json"
