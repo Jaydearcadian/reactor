@@ -14,11 +14,46 @@ WALLET="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 PROGRAM_SO="target/deploy/reactor.so"
 PROGRAM_KEYPAIR="target/deploy/reactor-keypair.json"
 PROGRAM_HEADROOM_BYTES="${REACTOR_PROGRAM_HEADROOM_BYTES:-65536}"
+PRE_EXTENSION_TARGET_LAMPORTS="${REACTOR_PRE_EXTENSION_TARGET_LAMPORTS:-3500000000}"
+DEPLOY_RESERVE_LAMPORTS="${REACTOR_DEPLOY_RESERVE_LAMPORTS:-5500000000}"
 
 if [[ ! -f "$WALLET" ]]; then
   echo "Missing Solana wallet: $WALLET" >&2
   exit 1
 fi
+
+read_balance() {
+  solana balance "$PAYER" --url "$DEPLOY_RPC" --lamports | awk '{print $1}'
+}
+
+try_top_up_to() {
+  local target="$1"
+  local label="$2"
+  local balance
+  balance="$(read_balance)"
+  if (( balance >= target )); then
+    echo "$label balance is sufficient: $balance lamports"
+    return 0
+  fi
+
+  echo "$label requires at least $target lamports; current balance is $balance."
+  echo "Attempting bounded devnet faucet top-up..."
+  for amount in 2 2 1 1 1; do
+    solana airdrop "$amount" "$PAYER" --url "$DEPLOY_RPC" || true
+    sleep 2
+    balance="$(read_balance)"
+    echo "Balance now: $balance lamports"
+    if (( balance >= target )); then
+      return 0
+    fi
+  done
+
+  echo "Devnet faucet did not raise $PAYER to the required balance." >&2
+  echo "Current:  $balance lamports" >&2
+  echo "Required: $target lamports" >&2
+  echo "Fund $PAYER with devnet SOL, then rerun this script." >&2
+  return 1
+}
 
 npm install
 anchor build
@@ -27,8 +62,7 @@ anchor build
 
 PROGRAM_ID="$(solana address -k "$PROGRAM_KEYPAIR")"
 PAYER="$(solana address -k "$WALLET")"
-BALANCE="$(solana balance "$PAYER" --url "$DEPLOY_RPC" --lamports | awk '{print $1}')"
-TARGET_LAMPORTS=3500000000
+BALANCE="$(read_balance)"
 
 BASE_GENESIS="$(solana genesis-hash --url "$BASE_RPC")"
 DEPLOY_GENESIS="$(solana genesis-hash --url "$DEPLOY_RPC")"
@@ -64,27 +98,10 @@ else
   echo "Onchain program metadata was not found; deployment will be treated as a new deploy."
 fi
 
-if (( BALANCE < TARGET_LAMPORTS )); then
-  echo "Payer has less than 3.5 SOL; attempting devnet faucet top-up."
-  for amount in 2 1 1; do
-    solana airdrop "$amount" "$PAYER" --url "$DEPLOY_RPC" || true
-    sleep 2
-    BALANCE="$(solana balance "$PAYER" --url "$DEPLOY_RPC" --lamports | awk '{print $1}')"
-    if (( BALANCE >= TARGET_LAMPORTS )); then
-      break
-    fi
-  done
-fi
-
-if (( BALANCE < 1000000000 )); then
-  echo "Devnet payer balance is too low to safely upgrade and run M3a: $BALANCE lamports." >&2
-  echo "Fund $PAYER with devnet SOL and rerun this script." >&2
-  exit 1
-fi
-
 if [[ -n "$ONCHAIN_DATA_LENGTH" ]]; then
   REQUIRED_CAPACITY=$((PROGRAM_BYTES + PROGRAM_HEADROOM_BYTES))
   if (( ONCHAIN_DATA_LENGTH < REQUIRED_CAPACITY )); then
+    try_top_up_to "$PRE_EXTENSION_TARGET_LAMPORTS" "ProgramData extension"
     EXTEND_BY=$((REQUIRED_CAPACITY - ONCHAIN_DATA_LENGTH))
     echo "ProgramData is too small for the M3 binary plus headroom."
     echo "Extending ProgramData by $EXTEND_BY bytes before upgrade..."
@@ -97,6 +114,14 @@ if [[ -n "$ONCHAIN_DATA_LENGTH" ]]; then
     echo "Existing ProgramData capacity is sufficient for the M3 binary."
   fi
 fi
+
+# Loader-v3 upgrades stage the new ELF in a temporary buffer account before the
+# Upgrade instruction. A large M3 binary therefore needs a sizeable transient
+# rent balance even when ProgramData itself has already been extended. Re-read
+# the payer after extension and restore a safe deployment reserve.
+try_top_up_to "$DEPLOY_RESERVE_LAMPORTS" "Program upgrade"
+
+echo "Pre-deploy payer balance: $(read_balance) lamports"
 
 export ANCHOR_PROVIDER_URL="$BASE_RPC"
 export ANCHOR_WALLET="$WALLET"
