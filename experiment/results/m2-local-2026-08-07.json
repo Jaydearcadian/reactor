@@ -1,0 +1,46 @@
+{
+  "artifact": "reactor-m2-local-validator-proof",
+  "date": "2026-08-07",
+  "environment": "Anchor local validator",
+  "evidence_level": "local-validator execution",
+  "program_id": "75ph49gq12tUVV2XAfmDozseGfuu5ZTSZDPB8MPF8oax",
+  "acceptance": {
+    "staleSequenceRejected": true,
+    "falsePredicateRejected": true,
+    "frozenSequences": [1, 1, 3, 1, 1, 1],
+    "laterConditionUpdateIgnoredByFrozenLock": true,
+    "settlementSignature": "5fUPsYnsP4M4wpgqSN4Z8oisdVoXZWGqamUkEBaS6CDbp86S93r9MiZYM4geZD8tXPnbqjoyWT9dA4tRpWqXjgsB",
+    "settlementSlot": 24,
+    "balanceObservationSlots": [22, 24],
+    "vaultDebitLamports": 100000,
+    "recipientDeltaLamports": 100000,
+    "valueConserved": true,
+    "exposureBefore": 700,
+    "exposureAfter": 500,
+    "receiptVerified": true,
+    "lockConsumed": true,
+    "duplicateExecutionRejected": true
+  },
+  "claim_boundary": {
+    "proves": [
+      "The Anchor program compiles and executes on a local Solana validator.",
+      "Stale exact condition versions are rejected.",
+      "A current condition with a false predicate is rejected.",
+      "A valid six-condition configuration can create one immutable exact-version lock.",
+      "Later condition updates do not mutate the accepted lock.",
+      "The locked execution debits the Reactor Vault by exactly 100000 lamports and credits the recipient by exactly 100000 lamports.",
+      "The controlled exposure state moves from 700 to the Objective target of 500.",
+      "The Receipt records verified objective completion.",
+      "The lock is consumed and duplicate execution is rejected."
+    ],
+    "does_not_prove": [
+      "Solana devnet execution",
+      "MagicBlock Ephemeral Rollup execution or latency advantage",
+      "Jito comparative performance",
+      "production DEX or market-maker integration",
+      "representative market demand",
+      "production security"
+    ]
+  },
+  "source": "User-executed scripts/bootstrap_m2_local.sh output supplied in chat on 2026-08-07."
+}
