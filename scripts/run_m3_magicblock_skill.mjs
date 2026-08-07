@@ -28,6 +28,7 @@ const ROUTER_RPC = process.env.REACTOR_ROUTER_RPC ?? "https://devnet-router.magi
 const ER_OVERRIDE = process.env.REACTOR_ER_RPC ?? null;
 const RPC_PACE_MS = Number(process.env.REACTOR_RPC_PACE_MS ?? 350);
 const BASE_PROBE_TIMEOUT_MS = Number(process.env.REACTOR_BASE_PROBE_TIMEOUT_MS ?? 8_000);
+const ER_CONDITION_TTL_SLOTS = Number(process.env.REACTOR_ER_CONDITION_TTL_SLOTS ?? 20_000);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -256,6 +257,7 @@ console.log(`authority:          ${authority}`);
 console.log(`objective:          ${objectivePda}`);
 console.log(`vault:              ${vaultPda}`);
 console.log(`candidate:          ${candidatePda}`);
+console.log(`M3 ER condition TTL: ${ER_CONDITION_TTL_SLOTS} slots (integration fixture, not M4 benchmark window)`);
 
 await send(baseProgram.methods.initializePath(new anchor.BN(1_000_000), pathExpiry)
   .accounts({ path: pathPda, authority, systemProgram: SystemProgram.programId }), [authorityKeypair]);
@@ -322,8 +324,14 @@ console.log("delegation verified via router + base owner + ER owner");
 
 async function updateEr(kind, sequence, value, predicateResult) {
   const currentSlot = await erConnection.getSlot("confirmed");
+  const validUntilSlot = currentSlot + ER_CONDITION_TTL_SLOTS;
   return send(
-    erProgram.methods.updateCondition(new anchor.BN(sequence), new anchor.BN(value), predicateResult, new anchor.BN(currentSlot + 100))
+    erProgram.methods.updateCondition(
+      new anchor.BN(sequence),
+      new anchor.BN(value),
+      predicateResult,
+      new anchor.BN(validUntilSlot),
+    )
       .accounts({ condition: conditionPdas[kind], source: sources[kind].publicKey }),
     [sources[kind]],
   );
@@ -427,6 +435,8 @@ await expectFailure("duplicate execution", () =>
 
 const result = {
   proofEnvironment: "magicblock-devnet-m3a",
+  proofScope: "integration-correctness-not-latency-benchmark",
+  erConditionTtlSlots: ER_CONDITION_TTL_SLOTS,
   preferredBaseRpc: PREFERRED_BASE_RPC,
   activeBaseRpc: ACTIVE_BASE_RPC,
   baseRpcFallbackUsed: ACTIVE_BASE_RPC !== PREFERRED_BASE_RPC,
