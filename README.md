@@ -4,7 +4,7 @@
 
 Reactor observes independently changing execution conditions, determines when they are jointly executable under one bounded objective, freezes the exact compatible state versions into an immutable lock, and separates transaction submission from verified objective completion.
 
-> Status: M1 product hypothesis and X1 deterministic local fixture. No MagicBlock, Solana, latency advantage, market demand, or production-security claim is proven by this repository yet.
+> Status: M1 product hypothesis, X1 deterministic local fixture, and X2/X3 measurement harness scaffold. No MagicBlock, Solana, Jito, latency advantage, market demand, or production-security claim is proven by this repository yet.
 
 ## The thesis
 
@@ -38,6 +38,10 @@ attempt → observation → verification
 - fair delayed-observer baseline model;
 - local scenario runner across multiple overlap durations;
 - invariant tests for stale updates, invalidation, immutable locks, duplicate prevention, verification, failure, and Gaia classification;
+- monotonic live telemetry recorder;
+- strict `SUBMITTED → ACKNOWLEDGED → OBSERVED → VERIFIED` evidence states;
+- dependency-free JSON-RPC connectivity probe;
+- live benchmark contract for standard Solana, Jito, and MagicBlock Reactor;
 - evidence-bounded whitepaper skeleton.
 
 ## Run the local fixture
@@ -51,16 +55,31 @@ python scripts/run_experiment.py
 
 The experiment runner writes a JSON result to `experiment/results/latest.json`.
 
+## Probe live RPC endpoints
+
+Connectivity is not execution evidence, but it is the first live integration check.
+
+```bash
+export SOLANA_RPC_URL="<solana-json-rpc-endpoint>"
+export MAGICBLOCK_RPC_URL="<magicblock-json-rpc-endpoint>"
+python scripts/probe_live_paths.py
+```
+
+The probe writes `experiment/results/live-probe.json` and records monotonic request timing. A successful RPC response must never be counted as a successful execution.
+
+See `LIVE_BENCHMARK.md` for the evidence contract required before an X3 claim is allowed.
+
 ## Evidence boundary
 
-The current simulator can show that:
+The current simulator and measurement harness can show that:
 
 - compatible condition versions can be evaluated deterministically;
 - expired, invalid, missing, or stale conditions cannot create a lock;
 - an accepted lock remains immutable after later updates;
 - duplicate evaluation cannot create duplicate effects;
-- `SUBMITTED`, `OBSERVED`, and `VERIFIED` are distinct states;
-- a latency-sensitive comparison can be represented reproducibly.
+- `SUBMITTED`, `ACKNOWLEDGED`, `OBSERVED`, and `VERIFIED` are distinct evidence states;
+- a latency-sensitive comparison can be represented reproducibly;
+- network probes can record transport timing without overstating execution success.
 
 It cannot yet show that:
 
@@ -78,9 +97,18 @@ reactor/
 ├── THESIS.md
 ├── EXPERIMENT_PROTOCOL.md
 ├── STATE_MACHINE.md
+├── LIVE_BENCHMARK.md
 ├── WHITEPAPER.md
 ├── src/reactor/
-├── scripts/run_experiment.py
+│   ├── engine.py
+│   ├── experiment.py
+│   ├── live_paths.py
+│   ├── model.py
+│   ├── rpc.py
+│   └── telemetry.py
+├── scripts/
+│   ├── run_experiment.py
+│   └── probe_live_paths.py
 ├── tests/
 ├── experiment/results/
 └── .github/workflows/test.yml
@@ -88,10 +116,10 @@ reactor/
 
 ## Next proof
 
-Replace the deterministic latency models with three measured paths receiving the same authenticated condition stream:
+Implement signed execution adapters for three measured paths receiving the same authenticated condition stream:
 
 1. standard Solana submission;
 2. optimized/Jito submission;
-3. MagicBlock Reactor.
+3. MagicBlock Reactor commit + base-layer execution.
 
 The primary metric is **verified valid-window capture rate**. The non-negotiable safety metric is **zero false locks**.
