@@ -1,0 +1,16 @@
+{
+  "name": "reactor-live-fixture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test:live-js": "node --test tests-js/*.test.mjs",
+    "fixture:solana": "node scripts/run_solana_fixture.mjs"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4"
+  }
+}
