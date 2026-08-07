@@ -33,6 +33,9 @@ BASE_RPC="${REACTOR_M4_ENGINE_BASE_RPC:-http://127.0.0.1:8899}"
 BASE_WS="${REACTOR_M4_ENGINE_BASE_WS:-ws://127.0.0.1:8900}"
 ER_RPC="${REACTOR_M4_ENGINE_ER_RPC:-http://127.0.0.1:7799}"
 ER_WS="${REACTOR_M4_ENGINE_ER_WS:-ws://127.0.0.1:7800}"
+ER_VALIDATOR="${REACTOR_M4_ENGINE_ER_VALIDATOR:-mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev}"
+ER_FUND_SOL="${REACTOR_M4_ENGINE_ER_FUND_SOL:-10}"
+ER_MIN_LAMPORTS="${REACTOR_M4_ENGINE_ER_MIN_LAMPORTS:-5000000000}"
 TRIALS="${REACTOR_M4_ENGINE_TRIALS:-10}"
 PROGRAM_KEYPAIR="target/deploy/reactor-keypair.json"
 PROGRAM_SO="target/deploy/reactor.so"
@@ -182,9 +185,6 @@ cleanup_current_process() {
     return 0
   fi
 
-  # Kill known direct children first (for example a spawned local faucet), then
-  # the validator process itself. Port preflight on the next run remains the
-  # final guard against any orphan that outlives its parent.
   if command -v pgrep >/dev/null 2>&1; then
     local children
     children="$(pgrep -P "$pid" 2>/dev/null || true)"
@@ -249,16 +249,17 @@ echo "Preflighting local M4-Engine ports..."
 clean_pidfile_process "$ER_PID_FILE" "stale local ER PID file process"
 clean_pidfile_process "$BASE_PID_FILE" "stale local base PID file process"
 
-# MagicBlock's documented fully-local defaults use base RPC/WS 8899/8900,
-# local ER RPC/WS 7799/7800, and the Solana test-validator faucet on 9900.
-# Only known validator/faucet processes are terminated; unrelated listeners are
+# MagicBlock's local defaults use base RPC/WS 8899/8900, the Solana faucet on
+# 9900, local ER RPC/WS 7799/7800, and an ER metrics listener on 9000.
+# Only known validator/faucet processes are terminated. Unrelated listeners are
 # reported and left untouched.
 for spec in \
   "8899:Local Solana RPC" \
   "8900:Local Solana WebSocket" \
   "9900:Local Solana faucet" \
   "7799:Local MagicBlock ER RPC" \
-  "7800:Local MagicBlock ER WebSocket"
+  "7800:Local MagicBlock ER WebSocket" \
+  "9000:Local MagicBlock ER metrics"
 do
   port="${spec%%:*}"
   label="${spec#*:}"
@@ -279,6 +280,23 @@ fi
 
 PAYER="$(solana address -k "$WALLET")"
 solana airdrop 100 "$PAYER" --url "$BASE_RPC" >/dev/null
+
+echo "Funding local MagicBlock validator identity on the base chain..."
+solana airdrop "$ER_FUND_SOL" "$ER_VALIDATOR" --url "$BASE_RPC" >/dev/null
+ER_BALANCE_LAMPORTS="$(solana balance "$ER_VALIDATOR" --url "$BASE_RPC" --lamports | awk '{print $1}')"
+if [[ ! "$ER_BALANCE_LAMPORTS" =~ ^[0-9]+$ ]]; then
+  echo "Could not parse local ER validator balance." >&2
+  exit 1
+fi
+if (( ER_BALANCE_LAMPORTS < ER_MIN_LAMPORTS )); then
+  echo "Local ER validator is underfunded after airdrop." >&2
+  echo "Validator: $ER_VALIDATOR" >&2
+  echo "Balance:   $ER_BALANCE_LAMPORTS lamports" >&2
+  echo "Required:  $ER_MIN_LAMPORTS lamports" >&2
+  exit 1
+fi
+printf '%s\n' "ER validator:     $ER_VALIDATOR"
+printf '%s\n' "ER base balance:  $ER_BALANCE_LAMPORTS lamports"
 
 echo "Building Reactor for localnet..."
 npm install
@@ -307,7 +325,7 @@ printf '%s\n' "Local ER RPC:     $ER_RPC"
 printf '%s\n' "Local ER WS:      $ER_WS"
 printf '%s\n' "Trials/path:      $TRIALS"
 printf '%s\n' "ER binary:        $(ephemeral-validator --version 2>/dev/null || echo unknown)"
-printf '%s\n' "ER mode:          headless (--no-tui)"
+printf '%s\n' "ER mode:          headless, reset local ledger"
 
 echo "Deploying Reactor only to the local base validator..."
 solana program deploy "$PROGRAM_SO" \
@@ -317,12 +335,9 @@ solana program deploy "$PROGRAM_SO" \
 solana program show "$PROGRAM_ID" --url "$BASE_RPC"
 
 echo "Starting local MagicBlock Ephemeral Rollup in headless mode..."
-# The official quickstart command is interactive. This bootstrap redirects the
-# process into a log file and backgrounds it, so the validator must explicitly
-# disable its terminal UI. MagicBlock's validator CLI exposes --no-tui for this
-# exact headless use case.
 RUST_LOG="${RUST_LOG:-info}" ephemeral-validator \
   --no-tui \
+  --reset \
   --remotes "$BASE_RPC" \
   --remotes "$BASE_WS" \
   -l 7799 \
@@ -363,6 +378,7 @@ export REACTOR_M4_ENGINE_BASE_RPC="$BASE_RPC"
 export REACTOR_M4_ENGINE_BASE_WS="$BASE_WS"
 export REACTOR_M4_ENGINE_ER_RPC="$ER_RPC"
 export REACTOR_M4_ENGINE_ER_WS="$ER_WS"
+export REACTOR_M4_ENGINE_ER_VALIDATOR="$ER_VALIDATOR"
 export REACTOR_M4_ENGINE_TRIALS="$TRIALS"
 
 echo
