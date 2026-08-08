@@ -118,6 +118,100 @@ pub mod reactor {
         Ok(())
     }
 
+    pub fn update_condition_and_maybe_seal(
+        ctx: Context<UpdateConditionAndMaybeSeal>,
+        kind: u8,
+        sequence: u64,
+        value: i64,
+        predicate_result: bool,
+        valid_until_slot: u64,
+    ) -> Result<()> {
+        require!((kind as usize) < CONDITION_COUNT, ReactorError::InvalidConditionKind);
+        let clock = Clock::get()?;
+        let source_key = ctx.accounts.source.key();
+
+        {
+            let selected = match kind {
+                0 => &mut ctx.accounts.condition_0,
+                1 => &mut ctx.accounts.condition_1,
+                2 => &mut ctx.accounts.condition_2,
+                3 => &mut ctx.accounts.condition_3,
+                4 => &mut ctx.accounts.condition_4,
+                5 => &mut ctx.accounts.condition_5,
+                _ => unreachable!(),
+            };
+            require_keys_eq!(
+                ctx.accounts.session_candidate.condition_keys[kind as usize],
+                selected.key(),
+                ReactorError::ConditionKeyMismatch
+            );
+            require_keys_eq!(selected.objective, ctx.accounts.session_candidate.objective, ReactorError::ConditionObjectiveMismatch);
+            require!(selected.kind == kind, ReactorError::ConditionOrderMismatch);
+            require_keys_eq!(selected.source, source_key, ReactorError::UnauthorizedConditionSource);
+            require!(sequence > selected.sequence, ReactorError::StaleSequence);
+            require!(valid_until_slot > clock.slot, ReactorError::ExpiredCondition);
+            selected.sequence = sequence;
+            selected.value = value;
+            selected.predicate_result = predicate_result;
+            selected.observed_slot = clock.slot;
+            selected.valid_until_slot = valid_until_slot;
+        }
+
+        let candidate = &mut ctx.accounts.session_candidate;
+        let conditions = [
+            &ctx.accounts.condition_0,
+            &ctx.accounts.condition_1,
+            &ctx.accounts.condition_2,
+            &ctx.accounts.condition_3,
+            &ctx.accounts.condition_4,
+            &ctx.accounts.condition_5,
+        ];
+
+        for (i, condition) in conditions.iter().enumerate() {
+            require_keys_eq!(candidate.condition_keys[i], condition.key(), ReactorError::ConditionKeyMismatch);
+            require_keys_eq!(condition.objective, candidate.objective, ReactorError::ConditionObjectiveMismatch);
+            require!(condition.kind as usize == i, ReactorError::ConditionOrderMismatch);
+        }
+
+        // A sealed candidate is immutable, but sources may continue advancing hot state.
+        if candidate.ready {
+            return Ok(());
+        }
+
+        let mut sequences = [0u64; CONDITION_COUNT];
+        let mut values = [0i64; CONDITION_COUNT];
+        let mut valid_until_slots = [0u64; CONDITION_COUNT];
+
+        for (i, condition) in conditions.iter().enumerate() {
+            // Not-yet-executable state is normal. Persist the authenticated source
+            // transition without turning a false predicate/short validity into a
+            // transaction failure that would roll back the new condition state.
+            if !condition.predicate_result
+                || condition.observed_slot > clock.slot
+                || condition.valid_until_slot <= clock.slot
+                || condition.valid_until_slot.saturating_sub(clock.slot) < candidate.minimum_remaining_slots
+            {
+                return Ok(());
+            }
+            sequences[i] = condition.sequence;
+            values[i] = condition.value;
+            valid_until_slots[i] = condition.valid_until_slot;
+        }
+
+        candidate.frozen_sequences = sequences;
+        candidate.frozen_values = values;
+        candidate.frozen_valid_until_slots = valid_until_slots;
+        candidate.sealed_slot = clock.slot;
+        candidate.ready = true;
+
+        emit!(SessionCandidateSealedEvent {
+            objective: candidate.objective,
+            frozen_sequences: candidate.frozen_sequences,
+            sealed_slot: candidate.sealed_slot,
+        });
+        Ok(())
+    }
+
     pub fn initialize_session_candidate(
         ctx: Context<InitializeSessionCandidate>,
         recipient: Pubkey,
@@ -505,6 +599,25 @@ pub struct UpdateCondition<'info> {
 }
 
 #[derive(Accounts)]
+pub struct UpdateConditionAndMaybeSeal<'info> {
+    #[account(mut, seeds = [SESSION_CANDIDATE_SEED, session_candidate.objective.as_ref()], bump = session_candidate.bump)]
+    pub session_candidate: Account<'info, SessionCandidate>,
+    #[account(mut)]
+    pub condition_0: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_1: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_2: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_3: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_4: Account<'info, ConditionState>,
+    #[account(mut)]
+    pub condition_5: Account<'info, ConditionState>,
+    pub source: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct InitializeSessionCandidate<'info> {
     #[account(
         init,
@@ -753,6 +866,13 @@ pub struct Receipt {
     pub bump: u8,
 }
 impl Receipt { pub const SPACE: usize = 8 + 32 + 32 + 32 + 8 + 8 + 8 + 8 + 1 + 1; }
+
+#[event]
+pub struct SessionCandidateSealedEvent {
+    pub objective: Pubkey,
+    pub frozen_sequences: [u64; CONDITION_COUNT],
+    pub sealed_slot: u64,
+}
 
 #[event]
 pub struct ExecutionReceiptEvent {
