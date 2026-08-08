@@ -104,6 +104,33 @@ fi
 
 echo "Building and deploying Reactor locally..."
 npm install
+
+# V2 uses a fresh zero-data system account as the fee payer for every
+# speculative attempt and independent source accounts as the fee payers for the
+# open/close writes. A transfer that creates a fresh system account below the
+# runtime's rent-exempt floor is rejected during simulation, so derive the floor
+# from this exact local validator instead of relying on a hard-coded amount.
+RENT_FLOOR_LAMPORTS="$(node -e '
+const { Connection } = require("@solana/web3.js");
+const rpc = process.argv[1];
+new Connection(rpc, "confirmed")
+  .getMinimumBalanceForRentExemption(0)
+  .then((value) => console.log(value))
+  .catch((error) => { console.error(error); process.exit(1); });
+' "$BASE_RPC")"
+
+if [[ ! "$RENT_FLOOR_LAMPORTS" =~ ^[0-9]+$ ]]; then
+  echo "Could not determine zero-data rent-exempt floor: $RENT_FLOOR_LAMPORTS" >&2
+  exit 1
+fi
+
+export REACTOR_M4_SPEC_V2_ATTEMPT_PAYER_LAMPORTS="$((RENT_FLOOR_LAMPORTS + 50000))"
+export REACTOR_M4_SPEC_V2_SOURCE_PAYER_LAMPORTS="$((RENT_FLOOR_LAMPORTS + 200000))"
+
+echo "Zero-data rent floor:       $RENT_FLOOR_LAMPORTS lamports"
+echo "Speculative payer funding:  $REACTOR_M4_SPEC_V2_ATTEMPT_PAYER_LAMPORTS lamports/account"
+echo "Source payer funding:       $REACTOR_M4_SPEC_V2_SOURCE_PAYER_LAMPORTS lamports/account"
+
 anchor build
 solana program deploy "$PROGRAM_SO" \
   --program-id "$PROGRAM_KEYPAIR" \
