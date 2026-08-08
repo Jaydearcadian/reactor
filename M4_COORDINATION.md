@@ -72,6 +72,58 @@ The Solana baseline gets:
 
 If a stronger honest Solana observer/coordinator strategy exists, implement it.
 
+### Strongest honest local Solana adversary: speculative exact-version submission
+
+The first observer-driven smoke located a large apparent crossover, but observer reaction latency is not allowed to remain an artificial handicap for Solana.
+
+Before evaluating the frozen gate, ordinary Solana therefore also receives a speculative coordinator strategy:
+
+```text
+prebuild many unique
+ evaluate_session_candidate([1,1,2,1,1,1])
+ transactions
+          ↓
+submit at bounded cadence before/during
+external source-event schedule
+          ↓
+any attempt may capture only the exact
+valuable version vector
+```
+
+Rules:
+
+- source writers remain independent;
+- no speculative transaction may mutate a source;
+- every speculative attempt targets only the frozen expected vector;
+- attempts must be uniquely signed so duplicate-signature suppression is not mistaken for inability to execute;
+- the strategy may start before the opening source emission because the expected objective/version vector is known to the coordinator;
+- failed early attempts are allowed and counted;
+- submission count, landed successes/failures and transaction-fee cost are recorded;
+- candidate account state, not RPC observer timing, remains capture ground truth;
+- false locks remain disqualifying.
+
+The initial implementation uses a distinct funded fee-payer keypair for each speculative transaction. This makes otherwise identical exact-version attempts unique without adding source authority or changing Reactor's instruction semantics.
+
+The speculative strategy is intentionally favorable to Solana. Its purpose is to answer whether the ER advantage survives removal of reactive observer latency, not to model the cheapest production coordinator.
+
+Runner:
+
+```text
+scripts/run_m4_coordination_speculative_solana.mjs
+```
+
+Default speculative smoke parameters:
+
+```text
+cadence: 10 ms
+lead before source-open emission: 50 ms
+tail after source-close emission: 100 ms
+max attempts/trial: 64
+trials/band: 2
+```
+
+Do not increase statistical sample size until this adversarial baseline has been run and inspected.
+
 ---
 
 ## Roles
@@ -164,7 +216,7 @@ A decision that executes only after C0 reaches seq2 is a miss/stale attempt.
 
 Hot conditions and `SessionCandidate` remain on local Solana.
 
-Flow:
+Observer-driven flow:
 
 ```text
 source C submits C2 seq2=true
@@ -176,6 +228,20 @@ coordinator learns executable state
 coordinator submits evaluate_session_candidate([1,1,2,1,1,1])
         ↓
 source A independently closes window
+```
+
+Adversarial speculative flow:
+
+```text
+coordinator begins bounded unique exact-version attempts
+        ↓
+source C independently submits C2 seq2=true
+        ↓
+Solana processes whichever transactions its scheduler admits
+        ↓
+one speculative attempt may seal exact vector
+        ↓
+source A independently submits C0 seq2=false
 ```
 
 No source transaction includes the Reactor seal.
@@ -213,12 +279,14 @@ For the local gate:
 1. prebuild and pre-sign source-open, coordinator-seal and source-close transactions;
 2. warm all connections/subscriptions before T0;
 3. submit source-open at T0;
-4. use the earliest authoritative processed signal available to the coordinator;
+4. use the earliest authoritative processed signal available to the observer-driven coordinator;
 5. immediately submit the already-signed seal transaction;
 6. independently submit close at `T0 + window_ms`;
 7. verify the actual candidate account after the race;
 8. use exact ledger state/version ordering for capture classification;
 9. report observer timing separately from ledger outcome.
+
+For the speculative Solana adversary, step 4 is intentionally bypassed: exact-version attempts may already be in flight before the source-open transaction is emitted.
 
 ### Important distinction
 
@@ -227,6 +295,16 @@ observer latency != ledger capture classification
 ```
 
 The previous atomic diagnostic proved why these must remain separate.
+
+### Emission schedule != authoritative state lifetime
+
+The smoke analyzer also established that the configured wall-clock spacing between source submissions must not be relabeled as guaranteed on-ledger state lifetime. Transaction processing can reorder when independently emitted updates become observable, and processed WebSocket callback order is not a canonical total execution ordering.
+
+Therefore:
+
+- configured `window_ms` is reported as **source-emission spacing**;
+- processed callback deltas are diagnostic only;
+- exact frozen version state / execution error remains the primary capture classifier.
 
 ---
 
@@ -252,7 +330,7 @@ Smoke phase:
 2 trials per band per path
 ```
 
-Only after harness semantics are clean:
+Only after harness semantics are clean **and the speculative Solana adversary has been evaluated**:
 
 ```text
 >= 50 trials per selected band per path
@@ -290,13 +368,16 @@ Per path and window band:
 - stale-attempt rate;
 - false-lock rate;
 - ambiguous-trial rate;
-- open-observed -> seal-processed latency;
-- T0 -> seal-processed observer latency;
+- open-observed -> seal-processed latency where observation is used;
+- T0 -> seal-processed observer latency where observation is used;
 - source-open processed slot;
 - seal processed slot;
 - close processed slot;
 - exact frozen version vector;
-- trial failure reason.
+- trial failure reason;
+- speculative attempts submitted where applicable;
+- speculative attempts landed successfully/failed;
+- speculative transaction-fee cost.
 
 Report Wilson/Newcombe 95% intervals for capture rates and treatment-minus-baseline differences.
 
@@ -309,7 +390,7 @@ Do not redefine the threshold after seeing results.
 Reactor clears the local M4-Coordination continuation gate only if:
 
 1. MagicBlock false-lock rate is exactly zero in the analyzed sample;
-2. MagicBlock exact capture rate exceeds the strongest implemented Solana baseline by **at least 20 percentage points** in two adjacent short-window bands;
+2. MagicBlock exact capture rate exceeds the **strongest implemented Solana baseline, including speculative submission if stronger**, by **at least 20 percentage points** in two adjacent short-window bands;
 3. the 95% interval for the capture-rate difference excludes zero in both bands;
 4. the advantage survives warmed connections and equal exclusion of setup/delegation cost;
 5. no observer artifact is being counted as an execution miss;
@@ -323,10 +404,10 @@ If these conditions fail, do not manufacture a product win.
 
 The product thesis weakens materially if any of the following occur:
 
-- the strongest Solana coordinator captures essentially every valuable window in the relevant bands;
+- the strongest Solana coordinator, including speculative exact-version submission, captures essentially every valuable window in the relevant bands;
 - ER coordination latency does not translate into higher exact capture rate;
 - false locks appear;
-- the apparent advantage disappears under a cleaner observer;
+- the apparent advantage disappears under a cleaner observer or speculative coordinator;
 - the only winning windows are so short that no valuable real-world source configuration plausibly persists that long;
 - the benchmark requires source writers to cooperate with Reactor in ways the target vertical would not;
 - the coordinator needs privileged source keys in production;
