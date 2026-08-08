@@ -20,6 +20,9 @@ IDL="${REACTOR_IDL:-target/idl/reactor.json}"
 LOG_DIR="experiment/results/m4-coordination-logs"
 BASE_LOG="$LOG_DIR/mb-test-validator.log"
 ER_LOG="$LOG_DIR/ephemeral-validator.log"
+OBSERVER_RESULT="experiment/results/m4-coordination-local-latest.json"
+OBSERVER_ANALYSIS="experiment/results/m4-coordination-analysis-latest.json"
+SPEC_RESULT="experiment/results/m4-coordination-speculative-solana-latest.json"
 mkdir -p "$LOG_DIR"
 
 BASE_PID=""
@@ -132,10 +135,22 @@ export REACTOR_M4_ENGINE_ER_WS="$ER_WS"
 export REACTOR_M4_ENGINE_ER_VALIDATOR="$ER_VALIDATOR"
 
 echo
-echo "Running M4-Coordination local smoke..."
+echo "=== Stage 1/3: observer-driven Solana vs MagicBlock smoke ==="
 node scripts/run_m4_coordination_local.mjs
 
 echo
-echo "Evidence: experiment/results/m4-coordination-local-latest.json"
-echo "Base log: $BASE_LOG"
-echo "ER log:   $ER_LOG"
+echo "=== Stage 2/3: observer smoke analysis ==="
+node scripts/analyze_m4_coordination_smoke.mjs
+
+echo
+echo "=== Stage 3/3: speculative Solana adversarial baseline ==="
+echo "Strategy: unique exact-version seal attempts; source writers remain independent; no source+seal bundling."
+node scripts/run_m4_coordination_speculative_solana.mjs
+
+echo
+echo "M4-Coordination session complete."
+echo "Observer evidence:      $OBSERVER_RESULT"
+echo "Observer analysis:      $OBSERVER_ANALYSIS"
+echo "Speculative evidence:   $SPEC_RESULT"
+echo "Base log:               $BASE_LOG"
+echo "ER log:                 $ER_LOG"
