@@ -23,6 +23,8 @@ ER_LOG="$LOG_DIR/ephemeral-validator.log"
 OBSERVER_RESULT="experiment/results/m4-coordination-local-latest.json"
 OBSERVER_ANALYSIS="experiment/results/m4-coordination-analysis-latest.json"
 SPEC_RESULT="experiment/results/m4-coordination-speculative-solana-latest.json"
+EFFICIENCY_DIR="experiment/results/m4-coordination-efficiency"
+EFFICIENCY_ANALYSIS="experiment/results/m4-coordination-efficiency-latest.json"
 mkdir -p "$LOG_DIR"
 
 BASE_PID=""
@@ -135,22 +137,32 @@ export REACTOR_M4_ENGINE_ER_WS="$ER_WS"
 export REACTOR_M4_ENGINE_ER_VALIDATOR="$ER_VALIDATOR"
 
 echo
-echo "=== Stage 1/3: observer-driven Solana vs MagicBlock smoke ==="
+echo "=== Stage 1/5: observer-driven Solana vs MagicBlock smoke ==="
 node scripts/run_m4_coordination_local.mjs
 
 echo
-echo "=== Stage 2/3: observer smoke analysis ==="
+echo "=== Stage 2/5: observer smoke analysis ==="
 node scripts/analyze_m4_coordination_smoke.mjs
 
 echo
-echo "=== Stage 3/3: speculative Solana adversarial baseline ==="
+echo "=== Stage 3/5: speculative Solana adversarial baseline ==="
 echo "Strategy: unique exact-version seal attempts; source writers remain independent; no source+seal bundling."
 node scripts/run_m4_coordination_speculative_solana.mjs
+
+echo
+echo "=== Stage 4/5: Solana speculation cadence efficiency sweep ==="
+bash scripts/run_m4_coordination_efficiency.sh
+
+echo
+echo "=== Stage 5/5: coordination efficiency frontier analysis ==="
+node scripts/analyze_m4_coordination_efficiency.mjs
 
 echo
 echo "M4-Coordination session complete."
 echo "Observer evidence:      $OBSERVER_RESULT"
 echo "Observer analysis:      $OBSERVER_ANALYSIS"
 echo "Speculative evidence:   $SPEC_RESULT"
+echo "Efficiency evidence:    $EFFICIENCY_DIR/"
+echo "Efficiency analysis:    $EFFICIENCY_ANALYSIS"
 echo "Base log:               $BASE_LOG"
 echo "ER log:                 $ER_LOG"
