@@ -69,16 +69,23 @@ async function fundMany(connection, wallet, recipients) {
     await connection.confirmTransaction({ signature, ...latest }, 'confirmed');
   }
 }
-async function prepare(builder, connection, payer, signers = []) {
+async function prepare(builder, connection, payer, signers = [], latest = null) {
   const tx = await builder.transaction();
-  const latest = await connection.getLatestBlockhash('confirmed');
-  tx.recentBlockhash = latest.blockhash;
+  const fresh = latest ?? await connection.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = fresh.blockhash;
   tx.feePayer = payer.publicKey;
   const unique = [payer, ...signers.filter((s) => !s.publicKey.equals(payer.publicKey))];
   tx.partialSign(...unique);
   let feeEstimateLamports = null;
   try { feeEstimateLamports = (await connection.getFeeForMessage(tx.compileMessage(), 'processed')).value; } catch {}
-  return { bytes: tx.serialize(), payer: payer.publicKey.toBase58(), feeEstimateLamports };
+  return {
+    bytes: tx.serialize(),
+    payer: payer.publicKey.toBase58(),
+    feeEstimateLamports,
+    preparedAtMs: nowMs(),
+    recentBlockhash: fresh.blockhash,
+    lastValidBlockHeight: fresh.lastValidBlockHeight ?? null,
+  };
 }
 async function waitForSignature(connection, signature, timeoutMs = STATUS_TIMEOUT_MS) {
   const started = nowMs();
@@ -120,6 +127,9 @@ async function sendMeasured(connection, prepared, scheduledAtMs) {
     submittedAtMs: submittedAt,
     processedAtMs: processedAt,
     submitToProcessedMs: processedAt - submittedAt,
+    preparedAgeAtSubmitMs: prepared.preparedAtMs != null ? submittedAt - prepared.preparedAtMs : null,
+    recentBlockhash: prepared.recentBlockhash ?? null,
+    lastValidBlockHeight: prepared.lastValidBlockHeight ?? null,
     feeEstimateLamports: prepared.feeEstimateLamports,
     feeLamports,
     computeUnitsConsumed,
@@ -198,9 +208,32 @@ async function createFixture({ mode, index, baseProgram, baseProvider, baseConne
     source: sources[kind].publicKey,
   });
 
-  const opening = await prepare(coupled(2, 2, true), connection, openingPayer, [sources[2]]);
-  const closing = await prepare(coupled(0, 2, false), connection, closingPayer, [sources[0]]);
-  return { index, mode, program, connection, candidate, opening, closing };
+  return {
+    index,
+    mode,
+    program,
+    connection,
+    candidate,
+    coupled,
+    sources,
+    openingPayer,
+    closingPayer,
+  };
+}
+
+async function preparePhase(fixtures, phase) {
+  if (!fixtures.length) return [];
+  const connection = fixtures[0].connection;
+  const latest = await connection.getLatestBlockhash('confirmed');
+  return Promise.all(fixtures.map((fixture) => {
+    if (phase === 'opening') {
+      return prepare(fixture.coupled(2, 2, true), fixture.connection, fixture.openingPayer, [fixture.sources[2]], latest);
+    }
+    if (phase === 'closing') {
+      return prepare(fixture.coupled(0, 2, false), fixture.connection, fixture.closingPayer, [fixture.sources[0]], latest);
+    }
+    throw new Error(`unknown preparation phase: ${phase}`);
+  }));
 }
 
 async function verifyCandidate(fixture) {
@@ -216,10 +249,14 @@ async function verifyCandidate(fixture) {
 }
 
 async function runEpisode({ mode, episode, fixtures }) {
+  // Critical fairness/correctness rule: fixture creation and ER delegation may take
+  // seconds. Sign the measured transitions only after *all* setup is complete so
+  // no treatment is punished by stale blockhashes accumulated during preparation.
+  const openings = await preparePhase(fixtures, 'opening');
   const episodeScheduledAt = nowMs() + 100;
   const openResults = await Promise.all(fixtures.map(async (fixture, index) => {
     const scheduledAt = episodeScheduledAt + scheduleOffset(index, fixtures.length);
-    const measured = await sendMeasured(fixture.connection, fixture.opening, scheduledAt);
+    const measured = await sendMeasured(fixture.connection, openings[index], scheduledAt);
     const verification = await verifyCandidate(fixture);
     return { objective: index, scheduledAtMs: scheduledAt, ...measured, ...verification };
   }));
@@ -227,12 +264,14 @@ async function runEpisode({ mode, episode, fixtures }) {
   const falseLocks = openResults.filter((x) => x.falseLock).length;
   const exactCaptures = openResults.filter((x) => !x.failure && x.exact).length;
 
-  // Post-seal mutation is part of the correctness gate. Use the same concurrent
-  // schedule but do not fold this second transition into opening throughput.
+  // Refresh the blockhash again after the opening phase. Closing transactions are
+  // correctness probes, not part of opening throughput, and must not reuse a
+  // blockhash that aged through fixture setup or the opening burst.
+  const closings = await preparePhase(fixtures, 'closing');
   const closeScheduledAt = nowMs() + 100;
   const closeResults = await Promise.all(fixtures.map(async (fixture, index) => {
     const scheduledAt = closeScheduledAt + scheduleOffset(index, fixtures.length);
-    const measured = await sendMeasured(fixture.connection, fixture.closing, scheduledAt);
+    const measured = await sendMeasured(fixture.connection, closings[index], scheduledAt);
     const verification = await verifyCandidate(fixture);
     return { objective: index, scheduledAtMs: scheduledAt, ...measured, immutable: verification.exact && !verification.falseLock, frozen: verification.frozen };
   }));
@@ -252,6 +291,8 @@ async function runEpisode({ mode, episode, fixtures }) {
   const fees = successfulOpen.map((x) => x.feeLamports).filter((x) => Number.isFinite(x));
   const feeEstimates = openResults.map((x) => x.feeEstimateLamports).filter((x) => Number.isFinite(x));
   const compute = successfulOpen.map((x) => x.computeUnitsConsumed).filter((x) => Number.isFinite(x));
+  const openingFailures = openResults.filter((x) => x.failure);
+  const closingFailures = closeResults.filter((x) => x.failure);
 
   const summary = {
     mode,
@@ -261,8 +302,10 @@ async function runEpisode({ mode, episode, fixtures }) {
     captureRate: exactCaptures / fixtures.length,
     falseLocks,
     immutableAfterClose: immutableCount,
-    openingSubmissionFailures: openResults.filter((x) => x.failure).length,
-    closeFailures: closeResults.filter((x) => x.failure).length,
+    openingSubmissionFailures: openingFailures.length,
+    closeFailures: closingFailures.length,
+    openingFailureSamples: openingFailures.slice(0, 5).map((x) => x.failure),
+    closeFailureSamples: closingFailures.slice(0, 5).map((x) => x.failure),
     coordinationAmplification: exactCaptures > 0 ? fixtures.length / exactCaptures : null,
     latencyMs: {
       min: latencies.length ? Math.min(...latencies) : null,
@@ -282,9 +325,13 @@ async function runEpisode({ mode, episode, fixtures }) {
       observedFeeLamportsTotal: fees.length ? fees.reduce((a, b) => a + b, 0) : null,
       estimatedFeeLamportsTotal: feeEstimates.length ? feeEstimates.reduce((a, b) => a + b, 0) : null,
       computeUnitsTotal: compute.length ? compute.reduce((a, b) => a + b, 0) : null,
+      maxOpeningPreparedAgeAtSubmitMs: openResults.length ? Math.max(...openResults.map((x) => x.preparedAgeAtSubmitMs ?? 0)) : null,
+      maxClosingPreparedAgeAtSubmitMs: closeResults.length ? Math.max(...closeResults.map((x) => x.preparedAgeAtSubmitMs ?? 0)) : null,
     },
   };
-  console.log(`${mode} episode=${episode} objectives=${fixtures.length} exact=${exactCaptures}/${fixtures.length} falseLocks=${falseLocks} immutable=${immutableCount}/${fixtures.length} p50=${summary.latencyMs.p50?.toFixed(3) ?? 'null'}ms p95=${summary.latencyMs.p95?.toFixed(3) ?? 'null'}ms cps=${capturesPerSecond?.toFixed(2) ?? 'null'}`);
+  console.log(`${mode} episode=${episode} objectives=${fixtures.length} exact=${exactCaptures}/${fixtures.length} falseLocks=${falseLocks} immutable=${immutableCount}/${fixtures.length} openFailures=${openingFailures.length} closeFailures=${closingFailures.length} p50=${summary.latencyMs.p50?.toFixed(3) ?? 'null'}ms p95=${summary.latencyMs.p95?.toFixed(3) ?? 'null'}ms cps=${capturesPerSecond?.toFixed(2) ?? 'null'}`);
+  if (openingFailures.length) console.log(`${mode} opening failure sample: ${openingFailures[0].failure}`);
+  if (closingFailures.length) console.log(`${mode} closing failure sample: ${closingFailures[0].failure}`);
   return { summary, openResults, closeResults };
 }
 
@@ -305,6 +352,7 @@ console.log(`episodes/path: ${EPISODES}`);
 console.log(`burst spread: ${BURST_SPREAD_MS}ms`);
 console.log('primitive: authenticated state transition + current-state maybe-seal');
 console.log('correctness path: no WebSocket callback, no second seal transaction');
+console.log('transaction freshness: measured phases signed only after setup with one fresh blockhash per phase');
 
 const all = [];
 for (let episode = 1; episode <= EPISODES; episode += 1) {
@@ -319,7 +367,13 @@ for (let episode = 1; episode <= EPISODES; episode += 1) {
 }
 
 const summaries = all.map((x) => x.summary);
-const invalid = summaries.some((x) => x.falseLocks !== 0 || x.immutableAfterClose !== x.objectives);
+const semanticPass = summaries.every((x) =>
+  x.falseLocks === 0
+  && x.exactCaptures === x.objectives
+  && x.immutableAfterClose === x.objectives
+  && x.openingSubmissionFailures === 0
+  && x.closeFailures === 0
+);
 const result = {
   benchmark: 'reactor-m5b-concurrent-objectives-local',
   scope: 'transition-coupled-concurrent-objectives-same-reactor-semantics-local-solana-vs-local-er',
@@ -333,13 +387,17 @@ const result = {
     webSocketInCorrectnessPath: false,
     distinctMeasuredFeePayerPerObjective: true,
     setupAndDelegationExcludedFromHotInterval: true,
+    measuredTransactionsPreparedAfterAllFixtureSetup: true,
+    freshSharedBlockhashPerMeasuredPhase: true,
   },
   summaries,
   episodes: all,
   semanticGate: {
     zeroFalseLocks: summaries.every((x) => x.falseLocks === 0),
-    allCapturedCandidatesImmutable: summaries.every((x) => x.immutableAfterClose === x.objectives),
-    pass: !invalid,
+    fullExactCapture: summaries.every((x) => x.exactCaptures === x.objectives),
+    allObjectivesImmutableAfterClose: summaries.every((x) => x.immutableAfterClose === x.objectives),
+    zeroMeasuredSubmissionFailures: summaries.every((x) => x.openingSubmissionFailures === 0 && x.closeFailures === 0),
+    pass: semanticPass,
   },
   claimBoundary: {
     supports: [
