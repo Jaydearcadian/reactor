@@ -38,10 +38,9 @@ test-ledger/
 ledger/
 .local-ledger/
 *.log
-experiment/results/*-latest.json
-experiment/results/*-logs/
-experiment/results/*-runs/
-experiment/results/*/
+experiment/results/*
+!experiment/results/archive/
+!experiment/results/archive/*.json
 
 # OS/editor noise
 .DS_Store
