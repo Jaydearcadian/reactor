@@ -2,241 +2,175 @@
 
 ## Status
 
-**Implementation staged; execution proof pending.**
+**Demonstrated end to end on 2026-08-07.**
 
-M2 and M2.5 are already demonstrated on a local validator and Solana devnet. M3 source now adds MagicBlock delegation hooks, a one-way `SessionCandidate`, explicit ER evaluation/sealing, commit-and-undelegate handoff, base-layer `materialize_lock`, and a devnet proof runner. These M3 claims remain unproven until `scripts/bootstrap_m3_magicblock.sh` compiles, deploys and passes against MagicBlock devnet.
+M3 preserves the proven M2 Solana settlement primitive and moves only Reactor's hot condition/evaluation state into a MagicBlock Ephemeral Rollup (ER).
 
-## Purpose
-
-M3 does **not** redesign the proven Reactor primitive. It moves only the rapidly changing condition/evaluation path into a MagicBlock Ephemeral Rollup (ER) and preserves Solana as the canonical lock, settlement and Receipt layer.
-
-The question M3 must answer is:
-
-> Can Reactor move its hot condition-coordination path into an Ephemeral Rollup, seal one exact executable candidate there, return that candidate to Reactor ownership on Solana, and then use the already-proven settlement path without weakening the M2 invariants?
-
-M3 is an integration proof. It is **not yet** evidence that MagicBlock improves capture rate or latency. That comparison belongs to M4.
-
-## Hard architecture boundary
+The demonstrated lifecycle is:
 
 ```text
-SOLANA DEVNET
-────────────────────────────────────────
-Path
-Objective
-Vault
-canonical ExecutionLock
-Settlement
-Receipt
+SOLANA
+Path / Objective / Vault
         │
-        │ initialize + delegate hot state
+        │ delegate hot state
         ▼
 MAGICBLOCK ER
-────────────────────────────────────────
 ConditionState × 6
 SessionCandidate
         ↓
-rapid authenticated updates
+authenticated updates
         ↓
-joint-validity evaluation
+exact-version evaluation
         ↓
-READY candidate
-exact sequence/value/validity snapshot
+sealed candidate
         │
-        │ commit-and-undelegate candidate
+        │ commit + undelegate candidate
         ▼
-SOLANA DEVNET
-────────────────────────────────────────
-SessionCandidate back under Reactor ownership
+SOLANA
+materialize canonical ExecutionLock
         ↓
-materialize_lock(candidate)
-        ↓
-canonical ExecutionLock
-        ↓
-execute_locked()
+execute_locked
         ↓
 Receipt
 ```
 
-### Never delegated in M3
+M3 is an **integration-correctness proof**, not a latency or market-value benchmark.
+
+## Architecture boundary
+
+Reactor does not delegate canonical economic authority into the ER.
+
+### Canonical on Solana
 
 - `Path`
 - `Objective`
 - `Vault`
 - canonical `ExecutionLock`
+- settlement
 - `Receipt`
-- settlement authority
 
-### Delegated in M3
+### Delegated for hot coordination
 
-- the six `ConditionState` accounts for one Reactor session;
-- one `SessionCandidate` account that can be sealed once when all six conditions are jointly executable.
+- six `ConditionState` accounts;
+- one `SessionCandidate`.
 
-The six conditions may remain delegated after the M3a proof. The candidate is commit-and-undelegated because base-layer `materialize_lock` must read it as a normal Reactor-owned Anchor account.
+The ER candidate can describe a bounded executable configuration, but it cannot spend the Vault.
 
 ## `SessionCandidate`
 
-An ER-local observation is not sufficient settlement authority. A candidate is therefore a bounded, immutable handoff object rather than the final economic lock.
+The candidate is a one-way handoff object that freezes the exact state used to make the execution decision.
 
-The implemented candidate records:
+It binds:
 
 ```text
-SessionCandidate {
-  authority
-  path
-  objective
-  vault
-  recipient
-  condition_keys[6]
-  minimum_remaining_slots
-  transfer_lamports
-  exposure_baseline
-  exposure_reduction
-  predicted_exposure
-  frozen_sequences[6]
-  frozen_values[6]
-  frozen_valid_until_slots[6]
-  sealed_slot
-  ready
-}
+authority
+path
+objective
+vault
+recipient
+condition_keys[6]
+minimum_remaining_slots
+transfer_lamports
+exposure_baseline
+exposure_reduction
+predicted_exposure
+frozen_sequences[6]
+frozen_values[6]
+frozen_valid_until_slots[6]
+sealed_slot
+ready
 ```
 
-The candidate may be produced quickly in the ER, but it cannot spend the Vault.
+A candidate transitions once:
+
+```text
+OPEN -> READY
+```
+
+Later condition changes must not rewrite its frozen state.
 
 ## Base-layer revalidation
 
-`materialize_lock` verifies:
+`materialize_lock` does not blindly trust an ER candidate. Solana revalidates the candidate against canonical authority and economic state before creating an `ExecutionLock`.
 
-1. candidate is `ready`;
-2. candidate authority equals the materializing signer;
-3. candidate binds the supplied `Path`, `Objective` and `Vault`;
+The materialization path checks that:
+
+1. the candidate is ready;
+2. candidate authority matches the materializing signer;
+3. the candidate binds the supplied `Path`, `Objective` and `Vault`;
 4. `Objective.path == Path`;
 5. `Vault.objective == Objective`;
-6. candidate condition set still equals the Objective condition set;
-7. Path is not expired;
-8. transfer amount remains within the Path limit;
+6. the candidate condition set still equals the Objective condition set;
+7. the Path remains valid;
+8. the transfer remains within the Path limit;
 9. current Vault exposure still equals the candidate's sealed exposure baseline;
-10. recomputed post-execution exposure exactly equals the candidate prediction;
+10. recomputed post-execution exposure equals the candidate prediction;
 11. the predicted exposure still satisfies the Objective target;
-12. recipient, exact condition versions and action parameters are copied unchanged into the canonical `ExecutionLock`.
+12. recipient, exact condition versions and action parameters are copied unchanged into the canonical lock.
 
-If Vault or authority state changed after ER detection, materialization fails rather than silently adapting the candidate.
+If canonical state drifts incompatibly, materialization fails rather than adapting the accepted candidate.
 
-## Candidate immutability
+## Demonstrated M3a result
 
-A `SessionCandidate` begins:
-
-```text
-ready = false
-```
-
-ER evaluation may transition it once:
+The passing MagicBlock/Solana devnet run demonstrated:
 
 ```text
-OPEN → READY
+Reactor program              75ph49gq12tUVV2XAfmDozseGfuu5ZTSZDPB8MPF8oax
+hot accounts                 6 conditions + 1 candidate
+all seven hot accounts       delegated + ownership verified
+stale exact sequence         rejected in ER
+false predicate              rejected in ER
+candidate                    sealed at exact current versions
+post-seal mutation           candidate unchanged
+candidate commit             observed on Solana
+candidate undelegation       observed on Solana
+canonical ExecutionLock      materialized
+vault debit                  100000 lamports
+recipient credit             100000 lamports
+exposure                     700 -> 500
+Receipt                      verified=true
+lock                         consumed=true
+duplicate execution          rejected
 ```
 
-`evaluate_session_candidate` rejects attempts to reseal a ready candidate. Conditions may continue changing after sealing; those changes must not alter the frozen versions in the candidate.
+Evidence:
 
-## M3a — explicit ER handoff
+```text
+experiment/results/m3-magicblock-devnet-2026-08-07.json
+```
 
-The implemented proof path is:
+During that passing run, the preferred MagicBlock base RPC was unavailable, so the harness used canonical Solana devnet for base-layer operations. MagicBlock remained the delegation and hot ER execution path. This is recorded in the evidence artifact and does not change the authority boundary above.
 
-1. deploy/upgrade the Reactor program on Solana devnet;
-2. create fresh `Path`, `Objective`, `Vault`, six conditions and one candidate;
-3. delegate the six conditions and candidate from Solana;
-4. observe all seven accounts at the MagicBlock ER endpoint;
-5. submit authenticated condition updates through the ER client;
-6. reject a stale exact-version candidate attempt in ER;
-7. reject a current version whose predicate is false in ER;
-8. publish a new valid version;
-9. seal `[1,1,3,1,1,1]` into the candidate;
-10. mutate another condition after sealing and prove the candidate is unchanged;
-11. commit-and-undelegate the candidate from ER;
-12. observe candidate ownership restored to Reactor on Solana;
-13. fetch the committed candidate through the base-layer program client;
-14. call `materialize_lock` on Solana;
-15. verify canonical `ExecutionLock` matches the ER candidate;
-16. call unchanged `execute_locked` on Solana;
-17. prove exact 100000-lamport value conservation, `700 → 500`, verified Receipt and duplicate rejection.
-
-Run:
+## Reproduce
 
 ```bash
 bash scripts/bootstrap_m3_magicblock.sh
 ```
 
-Default endpoints:
+The harness initializes a fresh Reactor fixture, delegates the hot state, exercises stale/false/exact candidate behavior in the ER, commits and undelegates the candidate, materializes the canonical lock on Solana, executes the bounded action, verifies value conservation and the postcondition, and rejects replay.
 
-```text
-Solana devnet  https://api.devnet.solana.com
-MagicBlock ER  https://devnet.magicblock.app/
-MagicBlock WS  wss://devnet.magicblock.app/
-```
+## What M3 proves
 
-A passing run writes:
+M3 supports these claims:
 
-```text
-experiment/results/m3-magicblock-latest.json
-```
+- Reactor hot condition/candidate state can be delegated into a MagicBlock ER;
+- authenticated condition updates and exact-version candidate sealing execute in the ER;
+- a sealed candidate remains immutable across later condition mutation;
+- the candidate can be committed and undelegated back to Solana;
+- Solana can revalidate the candidate into a canonical `ExecutionLock`;
+- the existing bounded settlement path can then execute and produce a verified `Receipt`;
+- the ER does not need Vault-spend authority.
 
-## M3b — Magic Action handoff
+## What M3 does not prove
 
-Only after M3a passes should the explicit handoff be replaced or augmented with a Magic Action that performs the base-layer continuation after candidate state has been safely committed.
+M3 does **not** establish:
 
-M3b changes orchestration, not economic authority. The ER still must never directly spend the Reactor Vault.
-
-## M3a acceptance gate
-
-M3a passes only if all are true:
-
-- [ ] upgraded Reactor program compiles with Anchor 0.32.1 + `ephemeral-rollups-sdk` 0.16.2 `anchor-compat`;
-- [ ] upgraded program deploys on Solana devnet;
-- [ ] six `ConditionState` accounts and one `SessionCandidate` are created;
-- [ ] all seven hot accounts are delegated;
-- [ ] all seven delegated accounts are observed at the ER endpoint;
-- [ ] authenticated condition updates execute through the ER path;
-- [ ] stale exact sequence is rejected in ER;
-- [ ] false predicate is rejected in ER;
-- [ ] exact current versions seal one candidate;
-- [ ] candidate freezes exactly `[1,1,3,1,1,1]`;
-- [ ] a later condition update does not mutate the candidate;
-- [ ] commit-and-undelegate succeeds for the candidate;
-- [ ] Reactor ownership of the candidate is observed again on Solana;
-- [ ] base-layer candidate contents match the ER-sealed candidate;
-- [ ] `materialize_lock` revalidates Path, Objective, Vault and sealed exposure;
-- [ ] canonical `ExecutionLock` matches candidate versions/action parameters;
-- [ ] unchanged `execute_locked` debits Vault by exactly 100000 lamports;
-- [ ] recipient receives exactly 100000 lamports;
-- [ ] controlled exposure moves exactly `700 → 500`;
-- [ ] Receipt is `verified=true`;
-- [ ] lock is consumed;
-- [ ] duplicate execution is rejected;
-- [ ] delegation, ER seal, finalize/undelegate, materialization and settlement signatures are stored separately.
-
-## Failure conditions
-
-Stop or reframe M3 if any of these occur:
-
-- a delegated condition cannot preserve authenticated per-source updates;
-- a ready candidate can be mutated after sealing;
-- candidate cannot be returned to Reactor ownership without weakening the model;
-- returned candidate cannot be deterministically linked to the canonical lock;
-- base materialization cannot reject changed Vault/Path state;
-- settlement requires delegating the Vault or weakening M2 authority;
-- ER acknowledgement is mistaken for committed Solana state;
-- the integration depends on artificial timing assumptions rather than observed execution.
-
-## Evidence boundary
-
-A passing M3a proves only that Reactor's hot coordination state can execute through MagicBlock and hand a sealed candidate back into the proven Solana settlement primitive.
-
-It still does **not** prove:
-
-- that ER is faster for Reactor's target workload;
-- that ER captures more valuable transient windows;
-- that ordinary Solana/Jito misses meaningful opportunities;
-- durable reservation of arbitrary external DEX state;
-- representative market-maker demand;
+- generic MagicBlock performance superiority;
+- higher capture probability than the strongest Solana strategy;
+- public-network/Jito superiority;
+- arbitrary external DEX reservation;
+- production economics;
+- representative market demand;
 - production security.
 
-Those performance and market claims are reserved for M4 and later evidence.
+Those questions are handled by M4 and M5.
