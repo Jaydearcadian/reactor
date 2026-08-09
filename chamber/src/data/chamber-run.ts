@@ -2,6 +2,9 @@ export type SourceId = `C${0 | 1 | 2 | 3 | 4 | 5}`
 export type ChamberVerdict = 'development' | 'pass' | 'fail' | 'invalid'
 export type EvidenceMode = 'development-fixture' | 'local-benchmark'
 export type TransitionPhase = 'churn' | 'opening' | 'probe'
+export type ChamberStage = 'observe' | 'align' | 'freeze' | 'commit' | 'verify'
+
+export const CHAMBER_STAGES: ChamberStage[] = ['observe', 'align', 'freeze', 'commit', 'verify']
 
 export interface ChamberSource {
   id: SourceId
