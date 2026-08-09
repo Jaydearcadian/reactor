@@ -1,10 +1,38 @@
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 dist/
 build/
 *.egg-info/
+
+# Rust / Anchor / Node build state
 target/
 .anchor/
 node_modules/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id.json
+*-keypair.json
+*keypair*.json
+wallet.json
+wallet-*.json
+
+# Local validator / benchmark runtime state
+test-ledger/
+ledger/
+.local-ledger/
+*.log
+experiment/results/*-logs/
+
+# OS/editor noise
 .DS_Store
