@@ -16,6 +16,12 @@ command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
 OBJECTIVE_COUNT="${REACTOR_M5B_OBJECTIVE_COUNT:-10}"
 EPISODES="${REACTOR_M5B_EPISODES:-1}"
 BURST_SPREAD_MS="${REACTOR_M5B_BURST_SPREAD_MS:-20}"
+# M5b is a concurrency/load gate, not an expiry-window benchmark. Keep condition
+# validity deliberately non-binding across long serial fixture/delegation setup,
+# especially on the local ER whose slot clock advances much faster than the
+# local Solana base runtime. Tests that study expiry should override this value
+# explicitly in a separate experiment.
+TTL_SLOTS="${REACTOR_M5B_TTL_SLOTS:-5000000}"
 
 if ! [[ "$OBJECTIVE_COUNT" =~ ^[1-9][0-9]*$ ]]; then
   echo "REACTOR_M5B_OBJECTIVE_COUNT must be a positive integer." >&2
@@ -23,6 +29,10 @@ if ! [[ "$OBJECTIVE_COUNT" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if ! [[ "$EPISODES" =~ ^[1-9][0-9]*$ ]]; then
   echo "REACTOR_M5B_EPISODES must be a positive integer." >&2
+  exit 1
+fi
+if ! [[ "$TTL_SLOTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "REACTOR_M5B_TTL_SLOTS must be a positive integer." >&2
   exit 1
 fi
 
@@ -51,6 +61,7 @@ echo "Reactor program identity synchronized: $SYNCED_PROGRAM_ID"
 echo "M5b objective count: $OBJECTIVE_COUNT"
 echo "M5b episodes/path:  $EPISODES"
 echo "M5b burst spread:   ${BURST_SPREAD_MS}ms"
+echo "M5b condition TTL:  ${TTL_SLOTS} slots (non-binding load-fixture validity)"
 
 TMP_SCRIPT="$(mktemp)"
 cleanup_tmp() { rm -f "$TMP_SCRIPT"; }
@@ -73,6 +84,7 @@ chmod +x "$TMP_SCRIPT"
 export REACTOR_M5B_OBJECTIVE_COUNT="$OBJECTIVE_COUNT"
 export REACTOR_M5B_EPISODES="$EPISODES"
 export REACTOR_M5B_BURST_SPREAD_MS="$BURST_SPREAD_MS"
+export REACTOR_M5B_TTL_SLOTS="$TTL_SLOTS"
 export REACTOR_M5B_BASE_RPC="${REACTOR_M5B_BASE_RPC:-http://127.0.0.1:8899}"
 export REACTOR_M5B_BASE_WS="${REACTOR_M5B_BASE_WS:-ws://127.0.0.1:8900}"
 export REACTOR_M5B_ER_RPC="${REACTOR_M5B_ER_RPC:-http://127.0.0.1:7799}"
