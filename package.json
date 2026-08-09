@@ -17,7 +17,7 @@
     "benchmark:m4:engine": "node scripts/run_m4_engine_local.mjs",
     "analyze:m4": "node scripts/analyze_m4_capture.mjs",
     "build:chamber": "npm --prefix chamber install && npm --prefix chamber run build",
-    "deploy": "npm run build:chamber && npx wrangler deploy"
+    "deploy": "npm run build:chamber && rm -rf .wrangler/deploy && npx wrangler deploy --config wrangler.jsonc --assets chamber/dist"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
