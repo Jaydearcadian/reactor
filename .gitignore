@@ -28,12 +28,20 @@ id.json
 wallet.json
 wallet-*.json
 
+# Local agent / workspace state
+.agents/
+skills-lock.json
+magicblock-test-storage/
+
 # Local validator / benchmark runtime state
 test-ledger/
 ledger/
 .local-ledger/
 *.log
+experiment/results/*-latest.json
 experiment/results/*-logs/
+experiment/results/*-runs/
+experiment/results/*/
 
 # OS/editor noise
 .DS_Store
