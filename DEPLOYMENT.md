@@ -1,22 +1,66 @@
 # Reactor Chamber — Deployment
 
-## Recommended host: Cloudflare Pages
+## Recommended host: Cloudflare Workers static assets
 
-Reactor Chamber is a static React + Vite application under `chamber/`, so deploy it as a Git-connected Cloudflare Pages project.
+Reactor Chamber is a static React + Vite application under `chamber/`. The repository deploys it through Wrangler, but **only after Vite has produced `chamber/dist/`**.
 
-### Project settings
+The production asset boundary is:
+
+```text
+source              chamber/
+compiled output     chamber/dist/
+Cloudflare assets   chamber/dist/
+```
+
+Never configure Wrangler to publish `chamber/` directly. That serves TypeScript/Vite source files and produces a blank production page.
+
+## Repository-authoritative deployment
+
+The root repository owns deployment:
+
+```bash
+npm run deploy
+```
+
+That command performs:
+
+```text
+npm run build:chamber
+  -> npm --prefix chamber install
+  -> npm --prefix chamber run build
+  -> tsc -b
+  -> vite build
+  -> chamber/dist/
+
+npx wrangler deploy
+  -> uploads chamber/dist/ only
+```
+
+`wrangler.jsonc` is committed and defines:
+
+```jsonc
+{
+  "name": "reactor",
+  "assets": {
+    "directory": "chamber/dist",
+    "not_found_handling": "single-page-application"
+  }
+}
+```
+
+## Cloudflare Git build settings
+
+For a Git-connected Workers build use:
 
 ```text
 Repository        Jaydearcadian/reactor
 Production branch main
-Root directory    chamber
-Framework preset  React (Vite)
-Build command     npm run build
-Build output      dist
-Node              20.20.2
+Root directory    /
+Deploy command    npm run deploy
+Node              20.20.2 or newer compatible Node 20+
 ```
 
-No server-side runtime or environment secrets are required by the current Chamber application.
+Do not set the output directory to `chamber`. The committed Wrangler configuration is authoritative and publishes `chamber/dist`.
 
 ## Evidence requirement before production deploy
 
@@ -46,7 +90,13 @@ DEVELOPMENT FIXTURE
 
 ## Pre-deploy acceptance gate
 
-From `chamber/`:
+From the repository root:
+
+```bash
+npm run build:chamber
+```
+
+Or from `chamber/` directly:
 
 ```bash
 npm install
@@ -54,34 +104,22 @@ npm test
 npm run build
 ```
 
-Then verify the built/deployed application:
+Then verify `chamber/dist/index.html` exists and references generated `/assets/...` bundles rather than `/src/main.tsx`.
 
-- loads M6 benchmark evidence rather than the development fixture;
-- shows 121 authenticated hot transitions;
-- shows Solana `123` canonical coordination transactions;
-- shows MagicBlock `10` canonical coordination transactions;
-- shows `91.87%` canonical-work reduction;
-- all evidence links resolve to public GitHub paths;
-- interactive M6 scrubber works;
-- source selectors C0–C5 work;
-- OBSERVE / ALIGN / FREEZE / COMMIT / VERIFY controls work;
-- mobile layout remains readable;
-- browser console has no uncaught runtime errors.
+The deployed application must:
 
-## Cloudflare Pages setup
-
-In Cloudflare:
-
-1. Workers & Pages → Create application → Pages.
-2. Import `Jaydearcadian/reactor` from GitHub.
-3. Set production branch to `main`.
-4. Set Root directory to `chamber`.
-5. Use React (Vite), or set build command `npm run build` manually.
-6. Set build output directory to `dist`.
-7. Deploy.
-
-Cloudflare Pages will provide a `*.pages.dev` production URL and Git-linked preview deployments for pull requests.
+- load M6 benchmark evidence rather than the development fixture;
+- show 121 authenticated hot transitions;
+- show Solana `123` canonical coordination transactions;
+- show MagicBlock `10` canonical coordination transactions;
+- show `91.87%` canonical-work reduction;
+- resolve evidence links to public GitHub paths;
+- keep the interactive M6 scrubber functional;
+- keep source selectors C0–C5 functional;
+- keep OBSERVE / ALIGN / FREEZE / COMMIT / VERIFY functional;
+- remain readable on mobile;
+- have no uncaught browser runtime errors.
 
 ## Submission URL
 
-Use the production `*.pages.dev` URL for the hackathon submission unless a custom Reactor domain is already available and can be configured without delaying submission.
+The current Worker name is `reactor`; after a successful production deployment the `workers.dev` URL is suitable for submission. A custom domain can be added later without changing the application build.
