@@ -32,7 +32,7 @@ export const EXPERIMENTS: ExperimentRecord[] = [
       'ExecutionLock materialized, Receipt verified, replay rejected',
     ],
     result: 'Exact-state authorization survived the ER → Solana authority boundary end to end.',
-    changedNext: 'Once lifecycle correctness was demonstrated, the next question became whether the ER was actually necessary or merely convenient.',
+    changedNext: 'Once lifecycle correctness was demonstrated, the next question became whether the ER created a measurable advantage for Reactor rather than merely a convenient integration.',
   },
   {
     id: 'm4',
@@ -53,7 +53,7 @@ export const EXPERIMENTS: ExperimentRecord[] = [
       'zero false locks across all 900 observations',
     ],
     result: 'The capability-superiority thesis was falsified. Solana could reproduce the same capture reliability through speculation.',
-    changedNext: 'Reactor moved from “capture possibility” to “coordination efficiency”: how much canonical work is required to preserve the same guarantees?',
+    changedNext: 'Reactor moved from “capture possibility” to “coordination efficiency”: how much work is required to preserve the same guarantees?',
   },
   {
     id: 'm5a',
@@ -102,7 +102,7 @@ export const EXPERIMENTS: ExperimentRecord[] = [
     id: 'm6',
     title: 'Coordination density spike',
     status: 'pass',
-    question: 'Does an ER become materially useful when one persistent objective absorbs many authenticated state changes but produces only one canonical economic outcome?',
+    question: 'Does Reactor gain a measurable architectural advantage by moving high-frequency coordination state into a MagicBlock ER while keeping economic authority canonical on Solana?',
     fixture: [
       '1 persistent objective',
       '120 non-executable churn transitions',
@@ -120,7 +120,7 @@ export const EXPERIMENTS: ExperimentRecord[] = [
       'MagicBlock canonical coordination: 10 tx',
       'canonical-work reduction: 91.87%',
     ],
-    result: 'PASS. The frozen ≥75% canonical-work reduction gate was cleared while preserving equivalent correctness.',
+    result: 'PASS. The MagicBlock hot-state path cleared the frozen ≥75% canonical-work reduction gate while preserving equivalent correctness.',
     changedNext: 'The remaining threat to Reactor essentiality is a simpler semantics-equivalent keeper. That is M7.',
   },
   {
