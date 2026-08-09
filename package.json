@@ -15,7 +15,9 @@
     "test:m4:telemetry": "node --test tests-js/m4-telemetry.test.mjs",
     "benchmark:m4": "node scripts/run_m4_capture_atomic.mjs",
     "benchmark:m4:engine": "node scripts/run_m4_engine_local.mjs",
-    "analyze:m4": "node scripts/analyze_m4_capture.mjs"
+    "analyze:m4": "node scripts/analyze_m4_capture.mjs",
+    "build:chamber": "npm --prefix chamber install && npm --prefix chamber run build",
+    "deploy": "npm run build:chamber && npx wrangler deploy"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

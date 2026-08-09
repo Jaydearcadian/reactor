@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reactor",
+  "compatibility_date": "2026-08-09",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "chamber/dist",
+    "not_found_handling": "single-page-application"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}
