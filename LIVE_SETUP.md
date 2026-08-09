@@ -6,14 +6,21 @@ This document defines the minimum environment required to move the Reactor bench
 
 The current live settlement fixture is intentionally minimal: a signed native SOL transfer whose postcondition is independently verified from the recipient balance.
 
-Required environment variables:
+Use a **throwaway devnet-only keypair**. Do not use a production wallet, and do not commit the keypair file. Reactor's `.gitignore` excludes common Solana keypair filenames and local environment files.
+
+Example setup:
 
 ```bash
+mkdir -p .secrets
+solana-keygen new --no-bip39-passphrase --outfile .secrets/reactor-devnet.json
+
 export SOLANA_RPC_URL="https://api.devnet.solana.com"
-export SOLANA_SECRET_KEY='[64 comma-separated key bytes]'
+export SOLANA_SECRET_KEY="$(cat .secrets/reactor-devnet.json)"
 export REACTOR_RECIPIENT="<recipient public key>"
 export REACTOR_LAMPORTS="1000"
 ```
+
+Because `.secrets/reactor-devnet.json` contains the full private key, keep it local and delete or rotate it when the experiment is finished. Never paste a funded production key into shell history or commit it to the repository.
 
 Run:
 
@@ -30,7 +37,7 @@ A successful run must report:
 - `verified: true` only when the postcondition is met;
 - submit-to-ack, ack-to-observed, observed-to-verified, and submit-to-verified timings.
 
-No private key must be committed to this repository.
+The fixture reads the key from the process environment and does not intentionally write the secret key into evidence output.
 
 ## Why this fixture is small
 
