@@ -4,7 +4,7 @@ use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
 
-declare_id!("9FKmHB6A6WUPpnvEaXfYekHgDvS9cBYY2yA3P4CEaEeD");
+declare_id!("75ph49gq12tUVV2XAfmDozseGfuu5ZTSZDPB8MPF8oax");
 
 pub const CONDITION_COUNT: usize = 6;
 pub const CONDITION_SEED: &[u8] = b"condition";
