@@ -1,95 +1,74 @@
 # Reactor
 
-**Persistent objective coordination for autonomous onchain systems.**
+**Persistent exact-state coordination infrastructure for fast-moving onchain systems.**
 
-**Open-source research + executable reference implementation.**
+> **Retry objectives, not transactions.**
 
-Reactor explores how agents, programs, feeds, venues and other independently controlled actors can coordinate around a shared objective without giving any one participant control over all of the state.
+Reactor keeps an objective alive across independently changing authenticated state, detects when the exact required configuration becomes executable, freezes that state into an immutable candidate, and carries the decision into bounded canonical execution and verified settlement.
 
-Instead of repeatedly submitting transactions and hoping their assumptions remain valid when execution lands, Reactor keeps an objective alive, evaluates it as authenticated state changes occur, freezes the exact configuration that makes the objective executable, and carries that decision toward bounded execution and verified settlement.
+It is not agent-only infrastructure. Reactor is intended for autonomous treasuries, protocol risk systems, keepers, multi-party execution systems, market/inventory automation, AI agents and other event-driven systems whose objectives outlive individual transaction attempts.
 
-> **Retry objectives, not transactions. Bind actions to exact state, not stale observations.**
-
-**MagicBlock runs Reactor's high-frequency coordination path. Solana remains the canonical authority and settlement layer.**
-
-[Architecture](#architecture) · [Evidence](#evidence) · [Research program](#research-program) · [Reproduce](#reproduce)
+**Submission brief:** [`SUBMISSION.md`](./SUBMISSION.md)  
+**Interactive demo:** [`chamber/`](./chamber/)  
+**Solana program:** `75ph49gq12tUVV2XAfmDozseGfuu5ZTSZDPB8MPF8oax`
 
 ---
 
-## Solana Blitz V7 — Collaboration
+## The problem
 
-Reactor treats collaboration as a systems problem.
+Faster execution does not eliminate stale state.
 
-A shared onchain objective may depend on state controlled by different agents, protocols, feeds, risk engines, venues or policies. None of those participants needs to surrender control of its own state. Reactor coordinates their authenticated transitions and determines when the combined configuration is jointly executable.
+As onchain systems become faster and more automated:
 
-```text
-Agent / Actor A ── state ──┐
-Oracle          ── state ──┤
-Protocol B      ── state ──┤
-Risk Engine     ── state ──┼── Persistent Objective
-Venue           ── state ──┤           │
-Policy          ── state ──┘           ▼
-                                  jointly executable?
-                                         │
-                                         ▼
-                                      Reactor
-```
+- state changes more frequently;
+- more bots, keepers, protocols and agents act concurrently;
+- opportunities and valid configurations disappear faster;
+- transaction attempts become stale more quickly;
+- retries can target assumptions that no longer hold.
 
-The collaboration is not social coordination layered on top of a blockchain. It is **machine-level collaboration over independently controlled state**.
+The coordination question becomes:
+
+> **When is an objective safely executable, and under which exact authenticated state?**
+
+If every relevant state transition can legitimately be controlled and co-bundled by one actor into one atomic transaction, Reactor may be unnecessary. Reactor is designed for persistent objectives whose inputs change independently and may be controlled by different actors or systems.
 
 ---
 
-## What Reactor is
-
-Transactions answer:
-
-> **What instruction should execute now?**
-
-Reactor explores a different abstraction:
-
-> **Under which exact state is a persistent objective allowed to become executable, and how do we preserve and verify that decision?**
+## What Reactor does
 
 ```text
 persistent Objective
         +
 bounded Path / authority
         +
-independently changing state
+independently changing authenticated state
         ↓
-exact joint-validity evaluation
+exact joint-state evaluation
         ↓
 immutable SessionCandidate
         ↓
 canonical ExecutionLock
         ↓
-bounded execution attempt
+bounded execution
         ↓
 postcondition verification
         ↓
 Receipt
 ```
 
-A Reactor objective is not a transaction waiting to be retried. It is a state machine that remains active while its authorized inputs change.
+The central abstraction is an **objective**, not persistent transaction bytes.
 
-When a source transition creates a jointly executable configuration, Reactor can evaluate the objective inside that authenticated transition and seal the exact current versions:
-
-```text
-update condition
-+
-evaluate current objective state
-+
-maybe seal exact candidate
-```
-
-The current transition-coupled instruction is:
+When a source transition creates a jointly executable configuration, Reactor can update the authenticated condition, evaluate the current objective state and seal the exact compatible source versions inside the same transition:
 
 ```text
 update_condition_and_maybe_seal(...)
 ```
 
+Later source updates do not mutate the sealed authorization.
+
 ---
 
-## Architecture
+## Why MagicBlock
 
 Reactor separates **hot coordination** from **canonical economic authority**.
 
@@ -97,522 +76,320 @@ Reactor separates **hot coordination** from **canonical economic authority**.
 SOLANA
 Path / Objective / Vault
         │
-        │ delegate hot state only
+        │ delegate hot coordination state
         ▼
-MAGICBLOCK ER
+MAGICBLOCK EPHEMERAL ROLLUP
 ConditionState × N
 SessionCandidate
         ↓
-rapid authenticated transitions
-        ↓
+authenticated state transitions
 exact objective evaluation
-        ↓
-sealed candidate
+candidate sealing
         │
-        │ commit + undelegate when needed
+        │ commit candidate
         ▼
 SOLANA
-materialize canonical ExecutionLock
+candidate revalidation
         ↓
-bounded settlement
+ExecutionLock
         ↓
-Receipt / verified postcondition
+settlement
+        ↓
+Receipt
 ```
 
-### What stays canonical on Solana
+### Hot in MagicBlock
 
-- `Path` — standing authority, limits and expiry;
-- `Objective` — target postcondition and canonical condition set;
-- `Vault` — canonical controlled economic state;
-- `ExecutionLock` — accepted exact execution configuration;
-- settlement;
-- `Receipt` — verified before/after outcome evidence.
+- `ConditionState × N`
+- `SessionCandidate`
+- high-frequency authenticated updates
+- exact-state evaluation
+- candidate sealing
 
-### What can become hot state in MagicBlock
+### Canonical on Solana
 
-- `ConditionState × N`;
-- `SessionCandidate`.
+- `Path`
+- `Objective`
+- `Vault`
+- `ExecutionLock`
+- settlement
+- `Receipt`
 
-The Ephemeral Rollup never receives authority to spend the canonical Vault.
+The Ephemeral Rollup does **not** receive unrestricted Vault spending authority.
 
-That boundary is deliberate:
-
-> **MagicBlock accelerates the coordination state. Solana preserves canonical authority and settlement.**
+End-to-end integration evidence: [`M3_MAGICBLOCK.md`](./M3_MAGICBLOCK.md)
 
 ---
 
-## Why this exists
+## Measured MagicBlock edge
 
-Reactor is **not** based on the claim that Solana cannot atomically construct an exact execution lock.
+### Question
 
-The experiments explicitly falsified that stronger claim.
+**Does Reactor gain a measurable architectural advantage by moving high-frequency coordination state into a MagicBlock ER while keeping economic authority canonical on Solana?**
 
-If the actor creating the final relevant state transition can legitimately bundle:
+### M6 answer
 
-```text
-state update
-+
-condition check
-+
-seal / execution
-```
-
-ordinary Solana atomicity can implement the same Reactor semantics.
-
-Reactor becomes more interesting when executability emerges from state controlled by different actors, programs, venues, feeds or agents, and when those objectives remain active across sustained change.
-
-The research question is therefore no longer:
-
-> Can MagicBlock capture a state that Solana fundamentally cannot?
-
-It is:
-
-> **Does a dedicated hot-state coordination runtime make persistent exact-state objectives operationally more efficient as concurrency, state-change rate and verification requirements increase?**
-
----
-
-## Evidence
-
-Reactor is a research project, but the current reference implementation is real and tested.
-
-| Milestone | Question | Result |
-|---|---|---|
-| M2 | Can Reactor freeze exact state and execute a bounded action? | **Yes — local + Solana devnet** |
-| M3 | Can hot state live in MagicBlock and safely hand back to Solana? | **Yes — demonstrated end to end** |
-| M4-Engine | Is there a local runtime latency signal? | **Yes — controlled local signal** |
-| M4-Coordination | Does reactive ER beat ordinary reactive Solana in the tested fixture? | **Yes** |
-| M4 strongest baseline | Can aggressive Solana speculation reproduce capture reliability? | **Yes — 99% vs 99%** |
-| M5a | Can objective evaluation move into the authenticated state transition on both runtimes? | **Yes — 10/10 both** |
-| M5b | Does transition-coupled coordination remain correct under concurrent objectives? | **10-objective smoke passed; higher-load gate active** |
-
-### Current program
+**Yes, in the frozen high-coordination-density fixture.**
 
 ```text
-Solana program
-75ph49gq12tUVV2XAfmDozseGfuu5ZTSZDPB8MPF8oax
+1 persistent objective
+120 non-executable churn transitions
+1 opening transition
+──────────────────────────────
+121 authenticated hot transitions
+
+→ 1 verified objective completion
 ```
 
----
+| Metric | Solana treatment | MagicBlock hot-state treatment |
+|---|---:|---:|
+| objective-relevant hot transitions | 121 | 121 |
+| verified completion | yes | yes |
+| false seals | 0 | 0 |
+| stale seals | 0 | 0 |
+| candidate immutable | yes | yes |
+| canonical coordination transactions | **123** | **10** |
 
-## M2 — Exact executability lock
+**Canonical-work reduction: 91.87%.**
 
-The first complete Reactor primitive demonstrated:
-
-```text
-exact condition versions
-        ↓
-immutable ExecutionLock
-        ↓
-bounded action
-        ↓
-verified Receipt
-```
-
-Solana devnet fixture:
-
-```text
-stale exact sequence        rejected
-false predicate             rejected
-frozen sequences            [1,1,3,1,1,1]
-later condition update      lock unchanged
-vault debit                 100000 lamports
-recipient credit            100000 lamports
-exposure                    700 -> 500
-Receipt                     verified=true
-lock                        consumed=true
-duplicate execution         rejected
-```
+The pass threshold was frozen at **≥75% reduction** before observing the result, with correctness required on both treatments.
 
 Evidence:
 
-```text
-M2_EXECUTABILITY_LOCK.md
-M2_DEVNET.md
-experiment/results/m2-devnet-2026-08-07.json
-```
+- [`M6_ESSENTIALITY_BENCHMARK.md`](./M6_ESSENTIALITY_BENCHMARK.md) — frozen protocol;
+- [`M6_ESSENTIALITY_RESULT.md`](./M6_ESSENTIALITY_RESULT.md) — observed PASS and bounded interpretation;
+- [`experiment/results/archive/`](./experiment/results/archive/) — immutable generated evidence;
+- [`scripts/run_m6_essentiality_local.mjs`](./scripts/run_m6_essentiality_local.mjs) — benchmark implementation.
 
 ---
 
-## M3 — MagicBlock → Solana lifecycle
+## Supporting experiments
 
-M3 moved six condition accounts and one `SessionCandidate` into a MagicBlock ER while keeping Path, Objective, Vault, canonical lock, settlement and Receipt on Solana.
+### M3 — MagicBlock → Solana lifecycle
 
-The passing devnet run demonstrated:
+Demonstrated end to end:
 
-```text
-7 hot accounts               delegated + ownership verified
-stale exact sequence         rejected in ER
-false predicate              rejected in ER
-candidate                    exact versions frozen
-post-seal mutation           candidate unchanged
-candidate commit             observed on Solana
-candidate undelegation       observed on Solana
-canonical ExecutionLock      materialized
-vault debit                  100000 lamports
-recipient credit             100000 lamports
-exposure                     700 -> 500
-Receipt                      verified=true
-lock                         consumed=true
-duplicate execution          rejected
-```
+- six condition accounts + one `SessionCandidate` delegated;
+- stale exact sequence rejected in the ER;
+- false predicate rejected in the ER;
+- exact candidate sealed;
+- candidate remained immutable after later state change;
+- candidate committed and returned to Solana;
+- canonical `ExecutionLock` materialized;
+- 100,000 lamport bounded settlement completed;
+- exposure moved `700 → 500`;
+- `Receipt.verified == true`;
+- replay rejected.
 
-Evidence:
+Evidence: [`M3_MAGICBLOCK.md`](./M3_MAGICBLOCK.md)
 
-```text
-M3_MAGICBLOCK.md
-experiment/results/m3-magicblock-devnet-2026-08-07.json
-```
-
-M3 is an integration-correctness proof, not a performance claim.
-
----
-
-## M4 — Falsifying the first thesis
-
-M4 compared three strategies under the same exact-version Reactor semantics:
-
-```text
-SR — Solana reactive
-source update -> observer -> coordinator seal
-
-MR — MagicBlock reactive
-source update -> ER observer/coordinator -> seal
-
-SS — Solana speculative
-continuous unique exact-version attempts around expected state
-```
+### M4 — exact-state capture baseline
 
 Randomized benchmark:
 
 ```text
-source-emission regimes       10 ms, 50 ms, 150 ms
-trials / regime / strategy    100
-randomized cycles             300
-strategy observations         900
-speculative cadence           50 ms
-window jitter                 ±20%
-random seed                   4082026
-false-lock requirement        0
+300 cycles
+900 strategy observations
+zero false locks
 ```
 
-The millisecond regimes are source-emission spacing, not asserted authoritative on-ledger state lifetimes.
+Overall exact capture:
 
-### Result
+| Strategy | Capture |
+|---|---:|
+| Solana reactive | 2.33% |
+| MagicBlock reactive | 99% |
+| aggressive Solana speculative | 99% |
 
-| Regime | Solana reactive | MagicBlock reactive | Solana speculative | SS attempts / capture | SS waste |
-|---:|---:|---:|---:|---:|---:|
-| ~10 ms | 0% | 97% | 97% | 4.12× | 75.75% |
-| ~50 ms | 1% | 100% | 100% | 4.48× | 77.68% |
-| ~150 ms | 6% | 100% | 100% | 6.58× | 84.80% |
-| **Overall** | **2.33%** | **99%** | **99%** | **5.07×** | **80.28%** |
-
-All **900 observations** completed with **zero false locks**.
-
-The speculative Solana baseline submitted:
+The speculative Solana baseline required:
 
 ```text
-1,506 exact-version attempts
-  297 successful captures
+1,506 attempts
+297 captures
 1,209 landed failed / stale attempts
+≈80.28% speculative waste
 ```
 
-### What changed because of M4
+M4 falsified the claim that MagicBlock could capture a state Solana fundamentally could not. The stronger surviving result is that reactive ER coordination achieved high capture reliability without the speculative amplification used by the strongest implemented Solana baseline.
 
-MagicBlock reactive and aggressive speculative Solana both reached **99% exact capture**.
+### M5a — transition-coupled exact-state authorization
 
-So Reactor does **not** claim:
+Same Reactor instruction on both runtimes:
 
-> MagicBlock can capture a state that Solana fundamentally cannot.
+```text
+Solana exact captures        10/10
+MagicBlock exact captures    10/10
+false locks                  0 / 0
+post-seal immutable          10/10 / 10/10
+```
 
-The stronger result is:
+Controlled local mean `sendRawTransaction → processed`:
 
-> **Reactive low-latency coordination reproduced the same exact-capture reliability that the implemented base-layer strategy achieved through repeated speculation.**
+```text
+Solana       386.274 ms
+MagicBlock    29.369 ms
+```
 
-M4 therefore changed Reactor's research direction from **capture possibility** to **coordination efficiency**.
+This is a controlled local signal for the tested transaction shape, not a generic runtime superiority claim.
 
-M4 measures transaction amplification and waste. It does **not** prove a 5× economic cost advantage.
+Evidence: [`M5_TRANSITION_COUPLED_RESULT.md`](./M5_TRANSITION_COUPLED_RESULT.md)
+
+### M5b — concurrent persistent objectives
+
+Corrected 50-objective smoke:
+
+```text
+Solana       50/50 exact
+MagicBlock   50/50 exact
+false locks  0 both
+immutable    50/50 both
+```
+
+But local Solana completed that workload faster:
+
+```text
+exact captures / second
+Solana       61.478
+MagicBlock   30.254
+```
+
+This falsified the naïve thesis that increasing horizontal objective count automatically makes the ER increasingly advantageous.
+
+Evidence: [`M5B_SMOKE_RESULT.md`](./M5B_SMOKE_RESULT.md)
 
 ---
 
-## M5a — Transition-coupled objectives
+## Who Reactor is for
 
-The earlier reactive architecture still depended on an off-runtime round trip:
-
-```text
-source update
- -> WebSocket
- -> Node coordinator
- -> second transaction
- -> seal
-```
-
-M5a removed that callback from the correctness path.
-
-The final source-authenticated transition now performs:
+Reactor becomes interesting when all of the following are true:
 
 ```text
-update condition
+persistent objective
 +
-evaluate current objective state
+independently changing state
 +
-maybe seal exact candidate
+exact-state authorization matters
++
+no single actor necessarily controls all relevant transitions
++
+bounded authority
++
+verified outcome
 ```
 
-### Correctness
+Representative systems:
 
-```text
-                     Solana        MagicBlock ER
-trials               10            10
-exact captures        10/10         10/10
-failures              0             0
-post-seal immutable   10/10         10/10
-false locks           0             0
-```
+- autonomous treasury and risk management;
+- keeper / automation networks;
+- protocol safety controllers;
+- multi-party coordination workflows;
+- market and inventory automation;
+- AI agents pursuing persistent economic objectives.
 
-This demonstrates an important boundary:
-
-> **Reactor semantics are portable. Solana can execute the same transition-coupled objective logic correctly.**
-
-### Controlled local runtime signal
-
-Measured `sendRawTransaction -> processed signature notification`:
-
-| Metric | Local Solana | Local MagicBlock ER |
-|---|---:|---:|
-| mean | 386.274 ms | 29.369 ms |
-| p50 | 396.801 ms | 29.294 ms |
-| p95 | 404.456 ms | 33.536 ms |
-| p99 | 406.952 ms | 34.169 ms |
-
-That was roughly a **13× lower observed interval** on the local ER for this transaction shape.
-
-It is a controlled local systems signal only. It is **not** a generic MagicBlock-vs-Solana speed claim.
-
-Evidence:
-
-```text
-M5_TRANSITION_COUPLED_RESULT.md
-```
+AI agents are a user class, not the definition of Reactor.
 
 ---
 
-## M5b — Concurrent persistent objectives
+## Why faster systems make coordination interesting
 
-M5b asks whether the same transition-coupled primitive remains exact as multiple objectives are simultaneously active.
-
-The benchmark uses:
+Future high-speed systems increasingly separate four concerns:
 
 ```text
-Path
-Objective
-Vault
-ConditionState × 6
-SessionCandidate
+OBJECTIVE
+What outcome should become true?
+        ↓
+COORDINATION
+When is it safely executable, under which exact state?
+        ↓
+EXECUTION
+Land the bounded action.
+        ↓
+VERIFICATION
+Did the intended outcome actually occur?
 ```
 
-per objective, with distinct measured fee payers and no WebSocket callback in the correctness path.
+Execution infrastructure is getting faster. Reactor explores the underdeveloped middle layer: **deterministic exact-state coordination**.
 
-### Corrected 10-objective smoke
+A useful shorthand is:
 
-```text
-                     Solana        MagicBlock ER
-exact captures        10/10         10/10
-false locks           0             0
-immutable after close 10/10         10/10
-open failures         0             0
-close failures        0             0
-coord amplification   1.0x          1.0x
-```
-
-Single local episode timing:
-
-| Metric | Local Solana | Local MagicBlock ER |
-|---|---:|---:|
-| p50 | 987.508 ms | 254.599 ms |
-| p95 | 1062.355 ms | 375.801 ms |
-| p99 | 1091.390 ms | 408.885 ms |
-| completion tail | 1098.649 ms | 405.645 ms |
-| exact captures / second | 8.723 | 21.820 |
-
-Both treatments consumed the same total Reactor compute in that smoke: **126,960 compute units**.
-
-This is still smoke evidence, not a stable production performance ratio.
-
-The first 50-objective attempt is not treated as runtime-capacity evidence because the configured condition TTL became binding during long serial fixture/delegation setup. That harness-validity issue is being removed before the 50-objective level is interpreted.
-
-Evidence and methodology:
-
-```text
-M5B_CONCURRENT_OBJECTIVES.md
-M5B_SMOKE_RESULT.md
-scripts/run_m5b_concurrent_objectives_local.mjs
-```
+> **Fast execution without exact-state binding can become fast stale execution.**
 
 ---
 
-## Research program
+## Forward research: inference cost
 
-Reactor is intentionally a **long-running open-source research project**, not a protocol with a predetermined answer.
+High-frequency autonomous systems may also suffer from **inference amplification** if every deterministic state update wakes an expensive reasoning model.
 
-The reference implementation evolves when experiments invalidate an assumption.
+A future Reactor experiment will compare a naïve agent re-evaluation loop against Reactor-gated coordination using metrics such as:
 
-```text
-M1  transient executability
-        ↓
-M2  exact-state lock + verified settlement
-        ↓
-M3  MagicBlock hot state -> Solana canonical lifecycle
-        ↓
-M4  reactive coordination vs aggressive speculation
-        ↓
-     stronger capture-superiority claim falsified
-        ↓
-M5  transition-coupled persistent objectives
-        ↓
-M5b concurrency and coordination efficiency
-        ↓
-M5c verified completion under load
-        ↓
-M6  real non-co-bundleable workload
-        ↓
-M6b resource preservation / reservation
-```
+- model calls per verified objective completion;
+- tokens per objective;
+- inference spend per verified completion;
+- decision latency;
+- correctness.
 
-### Current research frontier
-
-The next questions are:
-
-1. **Concurrency** — how does the runtime behave as active objectives rise from 10 to 50, 100 and beyond?
-2. **Coordination work** — how many submissions, retries and failed attempts are required per successful objective?
-3. **Economic cost** — compute, fees, bandwidth, state maintenance, delegation and commit cost per verified outcome.
-4. **End-to-end completion** — candidate → commit → canonical lock → settlement → verified Receipt under load.
-5. **Public infrastructure** — same-workload comparison on public infrastructure with the strongest fair Solana route.
-6. **Real vertical** — replace synthetic predicates with an economically meaningful non-co-bundleable objective.
-7. **Resource preservation** — prove Reactor can reserve or immediately consume the economically relevant resource, not merely prove that a valid configuration existed.
-
-The product thesis survives only if those tests show that persistent exact-state objectives justify a dedicated coordination layer.
+No inference-cost savings are claimed yet.
 
 ---
 
-## Evidence discipline
+## Research integrity
 
-Reactor distinguishes:
+Reactor is an open systems research project, not a benchmark optimized around a predetermined answer.
+
+The experiments have removed claims as well as supported them:
 
 ```text
-SUBMITTED != ACKNOWLEDGED != OBSERVED != VERIFIED
+M3   ER → Solana lifecycle                 demonstrated
+M4   fundamental capture superiority       falsified
+M5a  transition-coupled semantics          passed
+M5b  naive horizontal scaling advantage    falsified
+M6   coordination-density advantage         passed
+M7   keeper equivalence                     next
 ```
 
-RPC acceptance, a signature or an ER acknowledgement is never treated as verified objective completion by itself.
+Next adversarial protocol: [`M7_KEEPER_EQUIVALENCE_BENCHMARK.md`](./M7_KEEPER_EQUIVALENCE_BENCHMARK.md)
 
-### Demonstrated
+---
 
-- exact-version locks and candidates;
-- stale/replay rejection;
-- false-condition rejection;
-- candidate/lock immutability after later state changes;
-- bounded native-SOL value conservation;
-- verified objective postconditions;
-- replay protection;
-- MagicBlock hot-state delegation;
-- ER candidate sealing;
-- commit/undelegate back to Solana;
-- canonical Solana revalidation/materialization;
-- 300-cycle / 900-observation M4 benchmark;
-- transition-coupled exact-state capture on both local runtimes;
-- corrected 10-objective M5b concurrent smoke with zero false locks and full immutability.
+## What is not claimed
 
-### Not demonstrated / not claimed
+Current evidence does **not** establish:
 
-- fundamental MagicBlock capability superiority over Solana;
+- generic MagicBlock superiority over Solana;
 - production-wide latency ratios;
+- public-network throughput superiority;
 - production fee savings;
-- public Solana/Jito superiority or inferiority;
-- arbitrary external DEX state reservation;
-- representative market demand;
+- that every objective should use an ER;
+- Reactor superiority over a semantics-equivalent keeper;
+- arbitrary external DEX resource reservation;
 - production security;
-- production profitability.
+- representative market demand;
+- inference-cost savings.
 
 ---
 
-## Reproduce
+## Interactive submission demo
 
-### Deterministic fixture
+`chamber/` is Reactor's submission-facing explanation and evidence viewer.
 
-```bash
-python -m unittest discover -s tests -v
-python scripts/run_experiment.py
-```
+It presents:
 
-### M3 MagicBlock / Solana lifecycle
+1. why coordination becomes a first-class problem;
+2. what Reactor is and who it is for;
+3. why MagicBlock owns the hot coordination path;
+4. the measured ER edge;
+5. an interactive M6 run reconstruction;
+6. direct links from claims to repository evidence;
+7. the falsification history.
 
-```bash
-bash scripts/bootstrap_m3_magicblock.sh
-```
-
-### M4 statistical coordination benchmark
-
-```bash
-bash scripts/bootstrap_m4_coordination_statistical_local.sh
-```
-
-### M5a transition-coupled local benchmark
+Run locally:
 
 ```bash
-bash scripts/bootstrap_m5_transition_coupled_local.sh
+cd chamber
+npm install
+npm test
+npm run build
+npm run dev
 ```
 
-### M5b concurrent objective smoke
-
-```bash
-REACTOR_M5B_OBJECTIVE_COUNT=10 \
-REACTOR_M5B_EPISODES=1 \
-bash scripts/bootstrap_m5b_concurrent_objectives_local.sh
-```
-
-Local tooling includes Rust/Cargo, Anchor, Solana CLI, Node.js/npm, `mb-test-validator` and `ephemeral-validator`.
-
----
-
-## Repository map
-
-```text
-reactor/
-├── README.md
-├── PRODUCT_TRUTH.md
-├── THESIS.md
-├── EXPERIMENT_PROTOCOL.md
-├── STATE_MACHINE.md
-├── M2_EXECUTABILITY_LOCK.md
-├── M2_DEVNET.md
-├── M3_MAGICBLOCK.md
-├── M4_ENGINE.md
-├── M4_COORDINATION.md
-├── M4_COORDINATION_SMOKE_RESULT.md
-├── M4_SPECULATIVE_V2.md
-├── M4_BENCHMARK.md
-├── M5_COORDINATION_EFFICIENCY.md
-├── M5_TRANSITION_COUPLED_RESULT.md
-├── M5B_CONCURRENT_OBJECTIVES.md
-├── M5B_SMOKE_RESULT.md
-├── LIVE_BENCHMARK.md
-├── WHITEPAPER.md
-├── programs/reactor/
-├── src/reactor/
-├── src-js/
-├── scripts/
-├── tests/
-├── tests-js/
-└── experiment/results/
-```
-
----
-
-## Status
-
-**Experimental research prototype.**
-
-Reactor's exact-version locking and bounded settlement primitive is demonstrated locally and on Solana devnet. MagicBlock Ephemeral Rollup integration is demonstrated end to end. M4 completed a 300-cycle / 900-observation randomized coordination benchmark with zero false locks. M5a demonstrated transition-coupled exact-state capture on both local Solana and a local MagicBlock ER. M5b has passed the corrected 10-objective concurrent smoke gate and is continuing through higher-load falsification tests.
-
-Production economics, public-network superiority, real market demand and arbitrary external-resource reservation remain unproven.
-
-Reactor is open research. Failures, falsifications and benchmark corrections are part of the record rather than hidden from it.
+The production build prefers immutable evidence from `chamber/data/archive/` when a mutable `latest` result is not present.
