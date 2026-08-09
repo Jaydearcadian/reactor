@@ -58,18 +58,119 @@ TMP_RUNNER="$(mktemp scripts/.run_m6_essentiality_local.XXXXXX.mjs)"
 cleanup_tmp() { rm -f "$TMP_SCRIPT" "$TMP_RUNNER"; }
 trap cleanup_tmp EXIT
 
-# Instrumentation hotfix: the frozen protocol requires fresh-blockhash fairness,
-# not a particular RPC commitment. The original M6 runner fetched a blockhash at
-# `processed` while preflighting on a `confirmed` connection. On local Solana,
-# preflight can therefore evaluate against a bank that does not yet know the
-# newer processed blockhash and intermittently reject otherwise-valid hot-state
-# transactions. M5b already uses a confirmed blockhash for the same reason.
-# Patch only the transport commitment in a temporary runner; fixture, transition
-# schedule, accounting, thresholds, and protocol semantics remain unchanged.
-sed \
-  -e "s/getLatestBlockhash('processed')/getLatestBlockhash('confirmed')/g" \
-  -e "s/{ skipPreflight: false, maxRetries: 0 }/{ skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0 }/g" \
-  scripts/run_m6_essentiality_local.mjs > "$TMP_RUNNER"
+# Instrumentation-only runtime patch. The frozen M6 protocol defines the state
+# schedule, treatment boundary, correctness gates, and canonical accounting; it
+# does not require the large Anchor provider wallet to be the hot-state fee
+# payer. Two local-runtime issues are normalized here without changing the
+# experiment:
+#   1. use a confirmed blockhash with confirmed preflight, matching M5b;
+#   2. use a small dedicated per-treatment transition payer for measured ER/base
+#      hot-state transactions and ER finalization.
+#
+# The dedicated payer is funded inside the existing common setup transaction,
+# so no primary canonical-coordination transaction is added. This also avoids
+# asking the MagicBlock account cloner to mirror the ~500 SOL local test wallet
+# into the ER just to pay zero-base-fee runtime transactions.
+node --input-type=module - "$TMP_RUNNER" <<'NODE'
+import fs from 'node:fs';
+
+const output = process.argv[2];
+let source = fs.readFileSync('scripts/run_m6_essentiality_local.mjs', 'utf8');
+
+function replaceOnce(from, to, label) {
+  if (!source.includes(from)) throw new Error(`M6 instrumentation patch mismatch: ${label}`);
+  source = source.replace(from, to);
+}
+
+replaceOnce(
+  "const AUTHORITY_FUND_LAMPORTS = Number(process.env.REACTOR_M6_AUTHORITY_FUND_LAMPORTS ?? 80_000_000);\n",
+  "const AUTHORITY_FUND_LAMPORTS = Number(process.env.REACTOR_M6_AUTHORITY_FUND_LAMPORTS ?? 80_000_000);\nconst TRANSITION_PAYER_LAMPORTS = Number(process.env.REACTOR_M6_TRANSITION_PAYER_LAMPORTS ?? 5_000_000);\n",
+  'transition payer constant',
+);
+
+replaceOnce(
+`async function sendMeasuredBuilder({ builder, connection, wallet, signers = [] }) {
+  const tx = await builder.transaction();
+  const latest = await connection.getLatestBlockhash('processed');
+  tx.feePayer = wallet.publicKey;
+  tx.recentBlockhash = latest.blockhash;
+  if (signers.length) tx.partialSign(...signers);
+  const signed = await wallet.signTransaction(tx);
+  const submittedAtMs = nowMs();
+  let signature = null; let status = null; let failure = null;
+  try {
+    signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 0 });
+    status = await waitForSignature(connection, signature);
+    if (status.err) failure = \`runtime error: \${JSON.stringify(status.err)}\`;
+  } catch (error) { failure = String(error?.message ?? error); }
+  const processedAtMs = nowMs();
+  return { signature, slot: status?.slot ?? null, failure, submittedAtMs, processedAtMs, submitToProcessedMs: processedAtMs - submittedAtMs };
+}`,
+`async function sendMeasuredBuilder({ builder, connection, payer, signers = [] }) {
+  const tx = await builder.transaction();
+  const latest = await connection.getLatestBlockhash('confirmed');
+  tx.feePayer = payer.publicKey;
+  tx.recentBlockhash = latest.blockhash;
+  const uniqueSigners = [payer, ...signers.filter((signer) => !signer.publicKey.equals(payer.publicKey))];
+  tx.partialSign(...uniqueSigners);
+  const submittedAtMs = nowMs();
+  let signature = null; let status = null; let failure = null;
+  try {
+    signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0 });
+    status = await waitForSignature(connection, signature);
+    if (status.err) failure = \`runtime error: \${JSON.stringify(status.err)}\`;
+  } catch (error) { failure = String(error?.message ?? error); }
+  const processedAtMs = nowMs();
+  return { signature, slot: status?.slot ?? null, failure, submittedAtMs, processedAtMs, submitToProcessedMs: processedAtMs - submittedAtMs };
+}`,
+  'measured sender',
+);
+
+replaceOnce(
+  "  const sources = Array.from({ length: CONDITION_COUNT }, () => Keypair.generate());\n",
+  "  const sources = Array.from({ length: CONDITION_COUNT }, () => Keypair.generate());\n  const transitionPayer = Keypair.generate();\n",
+  'transition payer fixture',
+);
+
+replaceOnce(
+`  const fundingSignature = await baseProvider.sendAndConfirm(new Transaction().add(
+    SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: authority, lamports: AUTHORITY_FUND_LAMPORTS }),
+    SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: recipient, lamports: recipientRentFloor }),
+  ), []);`,
+`  const fundingSignature = await baseProvider.sendAndConfirm(new Transaction().add(
+    SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: authority, lamports: AUTHORITY_FUND_LAMPORTS }),
+    SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: recipient, lamports: recipientRentFloor }),
+    SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: transitionPayer.publicKey, lamports: TRANSITION_PAYER_LAMPORTS }),
+  ), []);`,
+  'transition payer funding',
+);
+
+replaceOnce(
+  "baseProgram, baseConnection, wallet, canonical, setupSignatures, delegationSignatures }",
+  "baseProgram, baseConnection, wallet, transitionPayer, canonical, setupSignatures, delegationSignatures }",
+  'transition payer return',
+);
+
+const measuredWalletCall = "connection: fixture.runtimeConnection, wallet: fixture.wallet, signers:";
+if (!source.includes(measuredWalletCall)) throw new Error('M6 instrumentation patch mismatch: measured call sites');
+source = source.replaceAll(measuredWalletCall, "connection: fixture.runtimeConnection, payer: fixture.transitionPayer, signers:");
+
+replaceOnce(
+`    erFinalizeSignature = await setupSend(fixture.runtimeProgram.methods.finalizeSessionCandidate().accounts({ payer: fixture.wallet.publicKey, sessionCandidate: fixture.candidate }));
+    await waitForConfirmedSignature(fixture.runtimeConnection, erFinalizeSignature);`,
+`    const finalizeMeasured = await sendMeasuredBuilder({
+      builder: fixture.runtimeProgram.methods.finalizeSessionCandidate().accounts({ payer: fixture.transitionPayer.publicKey, sessionCandidate: fixture.candidate }),
+      connection: fixture.runtimeConnection,
+      payer: fixture.transitionPayer,
+    });
+    assert(!finalizeMeasured.failure && finalizeMeasured.signature, \`magicblock: ER finalize failed: \${finalizeMeasured.failure ?? 'missing signature'}\`);
+    erFinalizeSignature = finalizeMeasured.signature;
+    await waitForConfirmedSignature(fixture.runtimeConnection, erFinalizeSignature);`,
+  'ER finalize payer',
+);
+
+fs.writeFileSync(output, source);
+NODE
 
 # Keep the mature process cleanup, funding, build/deploy, readiness and teardown
 # logic from M4-Engine. Replace only labels, log path, runner and evidence path.
