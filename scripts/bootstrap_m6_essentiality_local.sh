@@ -54,8 +54,22 @@ else
 fi
 
 TMP_SCRIPT="$(mktemp)"
-cleanup_tmp() { rm -f "$TMP_SCRIPT"; }
+TMP_RUNNER="$(mktemp scripts/.run_m6_essentiality_local.XXXXXX.mjs)"
+cleanup_tmp() { rm -f "$TMP_SCRIPT" "$TMP_RUNNER"; }
 trap cleanup_tmp EXIT
+
+# Instrumentation hotfix: the frozen protocol requires fresh-blockhash fairness,
+# not a particular RPC commitment. The original M6 runner fetched a blockhash at
+# `processed` while preflighting on a `confirmed` connection. On local Solana,
+# preflight can therefore evaluate against a bank that does not yet know the
+# newer processed blockhash and intermittently reject otherwise-valid hot-state
+# transactions. M5b already uses a confirmed blockhash for the same reason.
+# Patch only the transport commitment in a temporary runner; fixture, transition
+# schedule, accounting, thresholds, and protocol semantics remain unchanged.
+sed \
+  -e "s/getLatestBlockhash('processed')/getLatestBlockhash('confirmed')/g" \
+  -e "s/{ skipPreflight: false, maxRetries: 0 }/{ skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0 }/g" \
+  scripts/run_m6_essentiality_local.mjs > "$TMP_RUNNER"
 
 # Keep the mature process cleanup, funding, build/deploy, readiness and teardown
 # logic from M4-Engine. Replace only labels, log path, runner and evidence path.
@@ -63,7 +77,7 @@ sed \
   -e 's/m4-engine-logs/m6-essentiality-logs/g' \
   -e 's/Preflighting local M4-Engine ports/Preflighting local M6 essentiality ports/' \
   -e 's/Running controlled local M4-Engine benchmark/Running frozen local M6 essentiality benchmark/' \
-  -e 's|node scripts/run_m4_engine_local.mjs|node scripts/run_m6_essentiality_local.mjs|' \
+  -e "s|node scripts/run_m4_engine_local.mjs|node $TMP_RUNNER|" \
   -e 's/M4-Engine runner failed/M6 essentiality runner failed/' \
   -e 's|M4-Engine evidence: experiment/results/m4-engine-local-latest.json|M6 evidence: experiment/results/m6-essentiality-latest.json (Chamber mirror: chamber/data/m6-essentiality-latest.json)|' \
   scripts/bootstrap_m4_engine_local.sh > "$TMP_SCRIPT"
