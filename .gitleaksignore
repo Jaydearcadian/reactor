@@ -1,0 +1,4 @@
+# Verified false positives: these findings are public Solana addresses recorded in
+# the M2 devnet evidence artifact, not private keys or credentials.
+38ab6db7c09c4d054e3b411d1b981573c8ceeb9e:experiment/results/m2-devnet-2026-08-07.json:generic-api-key:11
+38ab6db7c09c4d054e3b411d1b981573c8ceeb9e:experiment/results/m2-devnet-2026-08-07.json:generic-api-key:16
